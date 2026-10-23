@@ -28,7 +28,7 @@ jobs:
       - name: Install NDK
         shell: bash
         run: |
-          yes | sdkmanager --channel=0 --install "ndk;30.0.16248370"
+          sdkmanager --channel=0 --install "ndk;30.0.16248370"
           echo "NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/30.0.16248370" >> "$GITHUB_ENV"
 
