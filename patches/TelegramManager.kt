@@ -1,7 +1,6 @@
 package com.v2ray.ang.ui
 
 import android.content.Context
-import android.text.Html
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -11,23 +10,42 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
 import org.drinkless.tdlib.Client
 import org.drinkless.tdlib.TdApi
+import org.json.JSONObject
 import java.net.HttpURLConnection
 import java.net.URL
-import java.text.SimpleDateFormat
+import java.net.URLEncoder
 import java.util.Calendar
-import java.util.Locale
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+/** حالت‌ها: init, phone, code, password, ready, other */
 object TelegramManager {
     val state = MutableStateFlow("init")
+
+    /** scanned/inRange برای حالت حساب تلگرام -1 هستن */
+    data class FetchResult(val configs: List<String>, val scanned: Int, val inRange: Int)
+
     private var client: Client? = null
     private var apiId = 0
     private var apiHash = ""
     private var dir = ""
-    private val LINK = Regex("""(?:vmess|vless|trojan|ss|hysteria2|hy2|tuic)://[^\s<>"'\`]+""")
-    private val TIME = Regex("""<time[^>]*datetime="([^"]+)"""" )
-    private val POST_ID = Regex("""data-post="[^"/]+/(\d+)"""" )
+
+    private val LINK = Regex("""(?:vmess|vless|trojan|ss|hysteria2|hy2|tuic)://[^\s<>"'`]+""")
+
+    /** شروع بازه (ثانیه یونیکس): 0 = امروز، 1 = ۲۴ ساعت اخیر، 2 = ۳ روز اخیر */
+    fun sinceFor(range: Int): Long {
+        val now = System.currentTimeMillis() / 1000
+        return when (range) {
+            1 -> now - 86_400
+            2 -> now - 3 * 86_400
+            else -> {
+                val c = Calendar.getInstance()
+                c.set(Calendar.HOUR_OF_DAY, 0); c.set(Calendar.MINUTE, 0)
+                c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
+                c.timeInMillis / 1000
+            }
+        }
+    }
 
     fun start(ctx: Context, apiId: Int, apiHash: String) {
         if (client != null) return
@@ -64,7 +82,7 @@ object TelegramManager {
             is TdApi.AuthorizationStateReady -> state.value = "ready"
             is TdApi.AuthorizationStateLoggingOut,
             is TdApi.AuthorizationStateClosing,
-            is TdApi.AuthorizationStateClosed -> Unit
+            is TdApi.AuthorizationStateClosed -> { /* موقع خروج نادیده بگیر */ }
             else -> state.value = "other"
         }
     }
@@ -85,14 +103,18 @@ object TelegramManager {
         if (await("phone", "ready", "code", "password") == "phone")
             call(TdApi.SetAuthenticationPhoneNumber(phone.trim(), null))
     }
+
+    /** برمی‌گردونه "ready" یا "password" */
     suspend fun sendCode(code: String): String {
         call(TdApi.CheckAuthenticationCode(code.trim()))
         return await("ready", "password")
     }
+
     suspend fun sendPassword(pw: String) {
         call(TdApi.CheckAuthenticationPassword(pw))
         await("ready")
     }
+
     suspend fun logout() {
         try { call(TdApi.LogOut()) } catch (_: Exception) { }
         delay(1500)
@@ -108,16 +130,10 @@ object TelegramManager {
         is TdApi.MessageAnimation -> c.caption.text
         else -> ""
     }
-    private fun startOfTodaySec(): Int {
-        val c = Calendar.getInstance()
-        c.set(Calendar.HOUR_OF_DAY, 0); c.set(Calendar.MINUTE, 0)
-        c.set(Calendar.SECOND, 0); c.set(Calendar.MILLISECOND, 0)
-        return (c.timeInMillis / 1000).toInt()
-    }
 
-    suspend fun fetchToday(username: String): List<String> {
+    /** حالت حساب تلگرام (نیاز به دسترسی به تلگرام) */
+    suspend fun fetchToday(username: String, sinceSec: Int): FetchResult {
         val chat = call(TdApi.SearchPublicChat(username.trim().removePrefix("@")))
-        val since = startOfTodaySec()
         val out = LinkedHashSet<String>()
         var from = 0L
         var empties = 0
@@ -130,43 +146,32 @@ object TelegramManager {
                 delay(500); continue
             }
             for (m in msgs) {
-                if (m.date < since) { stop = true; break }
+                if (m.date < sinceSec) { stop = true; break }
                 LINK.findAll(textOf(m)).forEach { out.add(it.value.trimEnd('.', ',', ';', ')')) }
             }
             from = msgs.last().id
         }
-        return out.toList()
+        return FetchResult(out.toList(), -1, -1)
     }
 
-    suspend fun fetchViaWorker(base: String, channel: String): List<String> = withContext(Dispatchers.IO) {
-        val name = channel.trim().removePrefix("@")
-        val sinceMs = startOfTodaySec() * 1000L
-        val fmt = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ssXXX", Locale.US)
-        val out = LinkedHashSet<String>()
-        var before: Long? = null
-        for (page in 0 until 10) {
+    /** حالت ورکر کلادفلر (فقط چنل عمومی؛ ورکر خودش کانفیگ‌ها رو درمیاره و JSON می‌ده) */
+    suspend fun fetchViaWorker(base: String, channel: String, sinceSec: Long): FetchResult =
+        withContext(Dispatchers.IO) {
+            val name = channel.trim().removePrefix("@")
             val sep = if (base.contains("?")) "&" else "?"
-            val url = base + sep + "channel=" + name + (before?.let { "&before=$it" } ?: "")
+            val url = base + sep + "channel=" + URLEncoder.encode(name, "UTF-8") + "&since=" + sinceSec
             val con = URL(url).openConnection() as HttpURLConnection
             con.connectTimeout = 20000
-            con.readTimeout = 20000
-            if (con.responseCode != 200) throw Exception("Worker HTTP ${con.responseCode}")
-            val html = con.inputStream.bufferedReader().use { it.readText() }
-            val posts = html.split("tgme_widget_message_wrap").drop(1)
-            if (posts.isEmpty()) break
-            var oldest = Long.MAX_VALUE
-            var oldestId: Long? = null
-            for (p in posts) {
-                val t = TIME.find(p)?.groupValues?.get(1)?.let { fmt.parse(it)?.time } ?: continue
-                val id = POST_ID.find(p)?.groupValues?.get(1)?.toLongOrNull()
-                if (t < oldest) { oldest = t; oldestId = id }
-                if (t < sinceMs) continue
-                val text = Html.fromHtml(p, Html.FROM_HTML_MODE_LEGACY).toString()
-                LINK.findAll(text).forEach { out.add(it.value.trimEnd('.', ',', ';', ')')) }
-            }
-            if (oldest < sinceMs || oldestId == null) break
-            before = oldestId
+            con.readTimeout = 60000
+            val code = con.responseCode
+            val body = (if (code in 200..299) con.inputStream else con.errorStream)
+                ?.bufferedReader()?.use { it.readText() } ?: ""
+            if (code == 403) throw Exception("forbidden")
+            if (code != 200) throw Exception("Worker HTTP $code")
+            val j = try { JSONObject(body) } catch (e: Exception) { throw Exception("NOT_JSON") }
+            if (!j.optBoolean("ok", false)) throw Exception(j.optString("error", "worker_error"))
+            val arr = j.getJSONArray("configs")
+            val list = (0 until arr.length()).map { arr.getString(it) }
+            FetchResult(list, j.optInt("posts_scanned"), j.optInt("posts_in_range"))
         }
-        out.toList()
-    }
 }
