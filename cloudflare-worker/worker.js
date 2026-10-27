@@ -1,21 +1,17 @@
-// Cloudflare Worker v3: read public Telegram channel posts and return proxy configs.
+// Cloudflare Worker v3: public Telegram channel config reader.
 const KEY = "MmdKavir85";
 const MAX_PAGES = 15;
 const LINK_RE = /(?:vmess|vless|trojan|ss|hysteria2|hy2|tuic):\/\/[^\s<>"'`]+/g;
 const UA = "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36";
-
 const json = (obj, status = 200) => new Response(JSON.stringify(obj), {
-  status,
-  headers: { "content-type": "application/json; charset=utf-8" },
+  status, headers: { "content-type": "application/json; charset=utf-8" },
 });
-
 function toText(html) {
   return html.replace(/<br\s*\/?>/gi, "\n").replace(/<[^>]+>/g, "")
     .replace(/&#x([0-9a-f]+);/gi, (_, h) => String.fromCodePoint(parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_, d) => String.fromCodePoint(parseInt(d, 10)))
     .replace(/&quot;/g, '"').replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
 }
-
 export default {
   async fetch(request) {
     const u = new URL(request.url);
@@ -24,7 +20,6 @@ export default {
     if (!/^[A-Za-z0-9_]{4,64}$/.test(channel)) return json({ ok: false, error: "bad_channel" }, 400);
     let since = parseInt(u.searchParams.get("since") || "0", 10);
     if (!since) since = Math.floor(Date.now() / 1000) - 86400;
-
     const configs = new Set();
     let scanned = 0, inRange = 0, before = null, pages = 0;
     while (pages < MAX_PAGES) {
@@ -33,12 +28,9 @@ export default {
       let res;
       try {
         res = await fetch(target, { headers: { "User-Agent": UA, "Accept-Language": "en-US,en;q=0.9" }, redirect: "follow" });
-      } catch {
-        return json({ ok: false, error: "fetch_failed" }, 502);
-      }
+      } catch { return json({ ok: false, error: "fetch_failed" }, 502); }
       if (!res.ok) return json({ ok: false, error: `telegram_http_${res.status}` }, 502);
-      const html = await res.text();
-      const chunks = html.split("tgme_widget_message_wrap").slice(1);
+      const chunks = (await res.text()).split("tgme_widget_message_wrap").slice(1);
       if (!chunks.length) {
         if (pages === 1) return json({ ok: false, error: "no_preview" });
         break;
