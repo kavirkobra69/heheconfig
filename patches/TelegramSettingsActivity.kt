@@ -349,6 +349,12 @@ class TelegramSettingsActivity : AppCompatActivity() {
                         apiHash.setText(prefs.getString("api_hash", ""))
                         phone.setText(prefs.getString("phone", ""))
                         workerUrl.setText(prefs.getString("worker_url", ""))
+                        channels.clear()
+                        channels.addAll((prefs.getString("channels_v2", "") ?: "").lines().filter { it.isNotBlank() })
+                        range = prefs.getInt("range", 0)
+                        lang = prefs.getString("lang", "fa") ?: "fa"
+                        refreshChannels()
+                        render()
                         say(t("backup_imported"))
                     }
                 }
