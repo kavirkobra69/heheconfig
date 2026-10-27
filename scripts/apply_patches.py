@@ -12,6 +12,7 @@ settings = root / "V2rayNG" / "settings.gradle.kts"
 required = [
     Path("patches/TelegramManager.kt"),
     Path("patches/TelegramSettingsActivity.kt"),
+    Path("patches/SessionBackup.kt"),
 ]
 for path in required:
     if not path.is_file():
