@@ -1,4 +1,4 @@
-<!-- Add inside <application> in V2rayNG/app/src/main/AndroidManifest.xml -->
+<!-- داخل <application> در AndroidManifest.xml اضافه کن -->
 <activity
     android:name=".ui.TelegramSettingsActivity"
     android:label="Telegram Import"
