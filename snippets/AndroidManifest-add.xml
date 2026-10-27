@@ -1,0 +1,10 @@
+<!-- Add inside <application> in V2rayNG/app/src/main/AndroidManifest.xml -->
+<activity
+    android:name=".ui.TelegramSettingsActivity"
+    android:label="Telegram Import"
+    android:exported="true">
+    <intent-filter>
+        <action android:name="android.intent.action.MAIN" />
+        <category android:name="android.intent.category.LAUNCHER" />
+    </intent-filter>
+</activity>
