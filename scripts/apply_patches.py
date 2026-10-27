@@ -81,4 +81,16 @@ if "TelegramSettingsActivity" not in manifest.read_text(encoding="utf-8"):
     raise SystemExit("TelegramSettingsActivity was not registered in the manifest")
 if "com.github.fazilus:tdlib-android" not in gradle.read_text(encoding="utf-8"):
     raise SystemExit("TDLib dependency was not added")
-print("Telegram Import patches applied and validated.")
+
+# Prevent a green build from silently packaging the old UI without backup controls.
+activity_text = (dest / "TelegramSettingsActivity.kt").read_text(encoding="utf-8")
+manager_text = (dest / "TelegramManager.kt").read_text(encoding="utf-8")
+backup_text = (dest / "SessionBackup.kt").read_text(encoding="utf-8")
+for marker in ("startBackupExport()", "startBackupImport()", "RC_EXPORT", "RC_IMPORT", "SessionBackup.export", "SessionBackup.extract"):
+    if marker not in activity_text:
+        raise SystemExit(f"Missing backup UI/flow marker: {marker}")
+if "suspend fun closeClient()" not in manager_text:
+    raise SystemExit("TelegramManager.closeClient() is missing")
+if "AES/GCM/NoPadding" not in backup_text or "PBKDF2WithHmacSHA1" not in backup_text:
+    raise SystemExit("Encrypted SessionBackup implementation is missing")
+print("Telegram Import patches applied and validated, including encrypted backup/restore UI.")
