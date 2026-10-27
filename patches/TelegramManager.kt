@@ -81,8 +81,8 @@ object TelegramManager {
             is TdApi.AuthorizationStateWaitPassword -> state.value = "password"
             is TdApi.AuthorizationStateReady -> state.value = "ready"
             is TdApi.AuthorizationStateLoggingOut,
-            is TdApi.AuthorizationStateClosing,
-            is TdApi.AuthorizationStateClosed -> { /* موقع خروج نادیده بگیر */ }
+            is TdApi.AuthorizationStateClosing -> state.value = "closing"
+            is TdApi.AuthorizationStateClosed -> state.value = "closed"
             else -> state.value = "other"
         }
     }
@@ -120,6 +120,20 @@ object TelegramManager {
         delay(1500)
         client = null
         state.value = "init"
+    }
+
+    /** Close TDLib before replacing its on-disk database during backup restore. */
+    suspend fun closeClient() {
+        val active = client ?: return
+        try {
+            active.send(TdApi.Close(), null)
+            withTimeout(8_000) { state.first { it == "closed" } }
+        } catch (_: Exception) {
+            // Continue cleanup; the app will recreate the client after restore.
+        } finally {
+            client = null
+            state.value = "init"
+        }
     }
 
     private fun textOf(m: TdApi.Message): String = when (val c = m.content) {
