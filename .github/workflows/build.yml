@@ -7,7 +7,7 @@ on:
       - main
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -77,3 +77,15 @@ jobs:
           path: upstream/V2rayNG/app/build/outputs/apk/**/*.apk
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish APKs to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Telegram Import APK - Build ${{ github.run_number }}
+          body: |
+            Automated APK build from commit ${{ github.sha }}.
+            Trigger: ${{ github.event_name }}
+          files: upstream/V2rayNG/app/build/outputs/apk/**/*.apk
+          fail_on_unmatched_files: true
+          make_latest: true
