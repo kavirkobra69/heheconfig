@@ -1,6 +1,8 @@
 package com.v2ray.ang.ui
 
 import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import android.graphics.Typeface
 import android.os.Bundle
 import android.text.InputType
@@ -26,6 +28,9 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
     private lateinit var channelList: LinearLayout
+    private val backupPassword by lazy { edit("", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD) }
+    private val RC_EXPORT = 7101
+    private val RC_IMPORT = 7102
 
     private fun t(k: String): String = STR[lang]?.get(k) ?: k
     private fun tf(k: String, vararg a: Any?): String = String.format(t(k), *a)
@@ -107,6 +112,8 @@ class TelegramSettingsActivity : AppCompatActivity() {
         btn { savePrefs(); say(t("saved")) }
     }
 
+    private val exportBackupBtn by lazy { btn { startBackupExport() } }
+    private val importBackupBtn by lazy { btn { startBackupImport() } }
     private val addBtn by lazy { btn { addChannel() } }
 
     private val rangeBtn by lazy {
@@ -225,6 +232,9 @@ class TelegramSettingsActivity : AppCompatActivity() {
         addBtn.text = t("add_channel")
         rangeBtn.text = tf("range_label", t("range$range"))
         importBtn.text = t("import_btn")
+        backupPassword.hint = t("backup_password")
+        exportBackupBtn.text = t("backup_export")
+        importBackupBtn.text = t("backup_import")
 
         val st = TelegramManager.state.value
         val hasCreds = !prefs.getString("api_id", "").isNullOrEmpty() &&
@@ -256,6 +266,12 @@ class TelegramSettingsActivity : AppCompatActivity() {
         root.addView(title(t("import_title")))
         root.addView(rangeBtn)
         root.addView(importBtn)
+
+        root.addView(title(t("backup_title")))
+        root.addView(label(t("backup_warning")))
+        root.addView(backupPassword)
+        root.addView(exportBackupBtn)
+        root.addView(importBackupBtn)
         root.addView(status)
     }
 
@@ -280,6 +296,67 @@ class TelegramSettingsActivity : AppCompatActivity() {
     }
 
     override fun onPause() { super.onPause(); savePrefs() }
+
+    private fun startBackupExport() {
+        val pw = backupPassword.text.toString()
+        if (pw.length < 10) { say(t("backup_password_short")); return }
+        val intent = Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "application/octet-stream"
+            putExtra(Intent.EXTRA_TITLE, "telegram-account-backup.tgbackup")
+        }
+        pendingBackupPassword = pw
+        startActivityForResult(intent, RC_EXPORT)
+    }
+
+    private fun startBackupImport() {
+        val pw = backupPassword.text.toString()
+        if (pw.length < 10) { say(t("backup_password_short")); return }
+        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "*/*"
+        }
+        pendingBackupPassword = pw
+        startActivityForResult(intent, RC_IMPORT)
+    }
+
+    private var pendingBackupPassword = ""
+
+    @Deprecated("Deprecated by Android; retained for compatibility with this Activity")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        val pw = pendingBackupPassword
+        pendingBackupPassword = ""
+        lifecycleScope.launch {
+            try {
+                when (requestCode) {
+                    RC_EXPORT -> {
+                        val out = contentResolver.openOutputStream(uri) ?: error("Cannot open output")
+                        out.use { SessionBackup.export(this@TelegramSettingsActivity, it, pw, prefs) }
+                        say(t("backup_exported"))
+                    }
+                    RC_IMPORT -> {
+                        val input = contentResolver.openInputStream(uri) ?: error("Cannot open backup")
+                        val restored = input.use { SessionBackup.extract(this@TelegramSettingsActivity, it, pw) }
+                        TelegramManager.closeClient()
+                        SessionBackup.commit(this@TelegramSettingsActivity, restored, prefs)
+                        val id = prefs.getString("api_id", "")?.toIntOrNull()
+                        val hash = prefs.getString("api_hash", "") ?: ""
+                        if (id != null && hash.isNotBlank()) TelegramManager.start(this@TelegramSettingsActivity, id, hash)
+                        apiId.setText(prefs.getString("api_id", ""))
+                        apiHash.setText(prefs.getString("api_hash", ""))
+                        phone.setText(prefs.getString("phone", ""))
+                        workerUrl.setText(prefs.getString("worker_url", ""))
+                        say(t("backup_imported"))
+                    }
+                }
+            } catch (e: Exception) {
+                say(tf("error", e.message ?: "backup_failed"))
+            }
+        }
+    }
 
     private fun savePrefs() {
         prefs.edit()
@@ -327,6 +404,14 @@ private val STR: Map<String, Map<String, String>> = mapOf(
         "range1" to "۲۴ ساعت اخیر",
         "range2" to "۳ روز اخیر",
         "import_btn" to "ایمپورت کانفیگ‌ها",
+        "backup_title" to "پشتیبان حساب تلگرام",
+        "backup_warning" to "فایل پشتیبان رمزگذاری می‌شود؛ رمز را فراموش نکن و فایل را محرمانه نگه دار.",
+        "backup_password" to "رمز پشتیبان (حداقل ۱۰ کاراکتر)",
+        "backup_password_short" to "برای پشتیبان رمز حداقل ۱۰ کاراکتری وارد کن",
+        "backup_export" to "Export حساب و نشست",
+        "backup_import" to "Import حساب و نشست",
+        "backup_exported" to "پشتیبان رمزگذاری‌شده ذخیره شد ✅",
+        "backup_imported" to "پشتیبان بازیابی شد؛ وضعیت اتصال را بررسی کن",
         "fill_api" to "API ID و API Hash رو پر کن",
         "sending" to "در حال ارسال...",
         "already" to "قبلاً وصل شدی",
@@ -373,6 +458,14 @@ private val STR: Map<String, Map<String, String>> = mapOf(
         "range1" to "Last 24 hours",
         "range2" to "Last 3 days",
         "import_btn" to "Import configs",
+        "backup_title" to "Telegram account backup",
+        "backup_warning" to "Backup is encrypted. Keep the file private and do not forget its password.",
+        "backup_password" to "Backup password (at least 10 characters)",
+        "backup_password_short" to "Enter a backup password with at least 10 characters",
+        "backup_export" to "Export account and session",
+        "backup_import" to "Import account and session",
+        "backup_exported" to "Encrypted backup saved ✅",
+        "backup_imported" to "Backup restored; check connection status",
         "fill_api" to "Fill in API ID and API Hash",
         "sending" to "Sending...",
         "already" to "Already logged in",
