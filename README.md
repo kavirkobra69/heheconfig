@@ -1,16 +1,19 @@
-# v2rayNG Telegram Import APK
+# v2rayNG + Telegram Import (نسخه ۶)
 
-این مخزن یک لایهٔ سفارشی برای ساخت APK اندروید است. هنگام اجرای GitHub Actions، سورس رسمی `2dust/v2rayNG` دریافت می‌شود، قابلیت ورود تلگرام روی آن اعمال می‌شود و APK به‌عنوان Artifact منتشر می‌شود.
+## ویژگی‌های نسخه ۶
+- کلید روشن/خاموش کنار هر چنل
+- فیلتر پروتکل: vmess, vless, trojan, ss, hysteria2, tuic
+- جلوگیری از ایمپورت کانفیگ‌های تکراری و پاک‌کردن تاریخچه
+- تست Worker، کپی کانفیگ‌ها، نوار پیشرفت و گزارش پروتکل‌ها
+- نمایش زمان و تعداد آخرین ایمپورت
 
-## ساخت APK
-1. وارد تب **Actions** همین مخزن شو.
-2. اجرای workflow با نام **Build Telegram Import APK** را انتخاب کن و روی **Run workflow** بزن. با هر push به `main` هم اجرا می‌شود.
-3. بعد از پایان موفق، داخل اجرای workflow بخش **Artifacts** فایل APK را دانلود کن.
+## ساختار فایل‌ها
+- `patches/TelegramManager.kt` و `patches/TelegramSettingsActivity.kt`: فایل‌های ورودی برای build workflow
+- `cloudflare-worker/worker.js`: کد Cloudflare Worker
+- `snippets/AndroidManifest-add.xml`: ورودی Manifest
+- `snippets/gradle-add.txt`: وابستگی‌ها و تنظیمات Gradle/ProGuard
 
-## راه‌اندازی قابلیت
-در اپ، API ID و API Hash را که از `my.telegram.org` گرفته‌ای وارد کن؛ آن‌ها داخل کد hard-code نشده‌اند. سپس شماره، کد ورود و در صورت نیاز رمز دومرحله‌ای را وارد کن و کانال‌های عمومی را هر خط یکی بنویس.
+## Build
+از تب Actions، ورک‌فلو Build را اجرا کن. فایل APK به‌صورت Artifact منتشر می‌شود.
 
-## هشدار امنیتی
-این قابلیت از بستهٔ غیررسمی TDLib از JitPack استفاده می‌کند و برای ورود، نشست حساب تلگرام روی دستگاه ایجاد می‌شود. فقط وقتی از این APK استفاده کن که به سورس و وابستگی‌های آن اعتماد داری. هرگز API Hash، کد ورود یا رمز تلگرام را در Issues، لاگ‌ها یا فایل‌های مخزن منتشر نکن.
-
-این مخزن خودش فورک کامل سورس v2rayNG نیست؛ workflow سورس upstream را هنگام بیلد دریافت می‌کند. سورس اصلی تحت GPL-3.0 است: https://github.com/2dust/v2rayNG
+نکته: پوشه‌های workflow و scripts عمداً نگه داشته شده‌اند تا فرایند ساخت APK خراب نشود.
