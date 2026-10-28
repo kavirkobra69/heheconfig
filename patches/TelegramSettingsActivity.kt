@@ -25,6 +25,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
+import org.json.JSONObject
+import android.util.Base64
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
@@ -37,6 +39,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private var range = 0
     private val log = StringBuilder()
     private val githubImportedGuids = mutableListOf<String>()
+    private val githubConfigByGuid = linkedMapOf<String, String>()
 
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
@@ -92,6 +95,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         edit("", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
     }
     private val workerUrl by lazy { edit("worker_url") }
+    private val githubToken by lazy { edit("github_token", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD).apply { hint = "GitHub token (Contents read/write)" } }
     private val githubJsonUrl by lazy { edit("github_json_url").apply {
         if (text.isNullOrBlank()) setText("https://raw.githubusercontent.com/kavirkobra69/heheconfig/main/configs.json")
     } }
@@ -233,6 +237,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         newChannel.setText("")
         savePrefs()
         refreshChannels()
+        syncChannelsToGitHub()
     }
 
     private fun refreshChannels() {
@@ -244,7 +249,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
                 text = "@$ch"; textSize = 16f
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
-            row.addView(btn { channels.remove(ch); savePrefs(); refreshChannels() }
+            row.addView(btn { channels.remove(ch); savePrefs(); refreshChannels(); syncChannelsToGitHub() }
                 .apply { text = t("remove") })
             channelList.addView(row)
         }
@@ -264,6 +269,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         password.hint = t("pw_hint")
         workerUrl.hint = t("worker_hint")
         githubJsonUrl.hint = t("github_url_hint")
+        githubToken.hint = t("github_token_hint")
         newChannel.hint = t("channel_hint")
         sendBtn.text = t("send_code")
         loginBtn.text = t("login")
@@ -308,6 +314,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         root.addView(title(t("github_title")))
         root.addView(label(t("github_description")))
         root.addView(githubJsonUrl)
+        root.addView(githubToken)
         root.addView(githubImportBtn)
         root.addView(testRealDelaysBtn)
 
@@ -342,6 +349,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         range = prefs.getInt("range", 0)
         channels.addAll(prefs.getString("channels_v2", "")!!.lines().filter { it.isNotBlank() })
         githubImportedGuids.addAll((prefs.getString("github_imported_guids", "") ?: "").lines().filter { it.isNotBlank() })
+        try { val saved = JSONObject(prefs.getString("github_config_by_guid", "{}") ?: "{}"); saved.keys().forEach { k -> githubConfigByGuid[k] = saved.optString(k) } } catch (_: Exception) {}
 
         // اگه قبلاً لاگین کردی خودکار وصل می‌شه
         val id = prefs.getString("api_id", "")?.toIntOrNull()
@@ -428,6 +436,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
             .putString("phone", phone.text.toString().trim())
             .putString("worker_url", workerUrl.text.toString().trim())
             .putString("github_json_url", githubJsonUrl.text.toString().trim())
+            .putString("github_token", githubToken.text.toString().trim())
             .putString("channels_v2", channels.joinToString("\n"))
             .putInt("range", range)
             .apply()
@@ -444,38 +453,34 @@ class TelegramSettingsActivity : AppCompatActivity() {
             try {
                 val configs = withContext(Dispatchers.IO) {
                     val connection = (URL(source).openConnection() as HttpURLConnection).apply {
-                        requestMethod = "GET"
-                        connectTimeout = 15000
-                        readTimeout = 30000
+                        requestMethod = "GET"; connectTimeout = 15000; readTimeout = 30000
                         setRequestProperty("User-Agent", "heheconfig-android")
                         setRequestProperty("Accept", "application/json")
                     }
                     try {
-                        val code = connection.responseCode
-                        if (code !in 200..299) throw Exception("HTTP $code")
-                        val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
-                        val array = JSONArray(body)
+                        if (connection.responseCode !in 200..299) throw Exception("HTTP ${connection.responseCode}")
+                        val array = JSONArray(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
                         val found = LinkedHashSet<String>()
-                        val pattern = Regex("""(?i)^(vmess|vless|trojan|ss|hysteria2|hy2|tuic)://\S+$""")
-                        for (i in 0 until array.length()) {
-                            val value = array.optString(i).trim()
-                            if (pattern.matches(value)) found.add(value)
-                        }
+                        val pattern = Regex("""(?i)^(vmess|vless|trojan|ss|hysteria2|hy2|tuic)://\\S+$""")
+                        for (i in 0 until array.length()) { val value = array.optString(i).trim(); if (pattern.matches(value)) found.add(value) }
                         found.toList()
                     } finally { connection.disconnect() }
                 }
                 if (configs.isEmpty()) { say(t("github_empty")); return@launch }
-                val before = MmkvManager.decodeAllServerList().toSet()
-                val result = importIntoV2ray(configs.joinToString("\n"))
-                val after = MmkvManager.decodeAllServerList().toSet()
-                val newIds = after - before
-                githubImportedGuids.clear()
-                githubImportedGuids.addAll(newIds)
-                prefs.edit().putString("github_imported_guids", newIds.joinToString("\n")).apply()
-                say(tf("github_imported", result.first, newIds.size))
-            } catch (e: Exception) {
-                say(tf("error", e.message ?: "github_import_failed"))
-            }
+                val newIds = linkedSetOf<String>()
+                githubConfigByGuid.clear()
+                for ((index, config) in configs.withIndex()) {
+                    say(tf("github_import_progress", index + 1, configs.size))
+                    val before = MmkvManager.decodeAllServerList().toSet()
+                    importIntoV2ray(config)
+                    val after = MmkvManager.decodeAllServerList().toSet()
+                    (after - before).forEach { guid -> newIds.add(guid); githubConfigByGuid[guid] = config }
+                }
+                githubImportedGuids.clear(); githubImportedGuids.addAll(newIds)
+                prefs.edit().putString("github_imported_guids", newIds.joinToString("\n"))
+                    .putString("github_config_by_guid", JSONObject(githubConfigByGuid as Map<*, *>).toString()).apply()
+                say(tf("github_imported", configs.size, newIds.size))
+            } catch (e: Exception) { say(tf("error", e.message ?: "github_import_failed")) }
         }
     }
 
@@ -502,16 +507,98 @@ class TelegramSettingsActivity : AppCompatActivity() {
                     is RealPingEvent.Progress -> runOnUiThread { say(tf("test_progress", successful.size, targets.size)) }
                     is RealPingEvent.Finish -> runOnUiThread {
                         val failed = targets.filterNot { successful.contains(it) }
-                        failed.forEach { MmkvManager.removeServer(it) }
-                        githubImportedGuids.clear()
-                        githubImportedGuids.addAll(successful)
-                        prefs.edit().putString("github_imported_guids", successful.joinToString("\n")).apply()
-                        say(tf("test_finished", successful.size, failed.size))
+                        if (failed.isEmpty()) { say(tf("test_finished", successful.size, 0)); return@runOnUiThread }
+                        AlertDialog.Builder(this)
+                            .setTitle(t("github_cleanup_title"))
+                            .setMessage(tf("github_cleanup_confirm", successful.size, failed.size))
+                            .setNegativeButton(t("cancel")) { _, _ -> say(t("cleanup_cancelled")) }
+                            .setPositiveButton(t("github_cleanup_yes")) { _, _ -> publishWorkingConfigsToGitHub(failed) }
+                            .show()
                     }
                 }
             }.start()
-        } catch (e: Exception) {
-            say(tf("error", e.message ?: "test_failed"))
+        } catch (e: Exception) { say(tf("error", e.message ?: "test_failed")) }
+    }
+
+    private fun githubTokenValue(): String = (githubToken.text.toString().trim().ifEmpty { prefs.getString("github_token", "") ?: "" })
+
+    private fun githubRequest(path: String, method: String, body: JSONObject? = null): JSONObject {
+        val token = githubTokenValue()
+        if (token.isBlank()) throw Exception("GitHub token را وارد کن")
+        val url = URL("https://api.github.com/repos/kavirkobra69/heheconfig/contents/$path")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = method; connectTimeout = 15000; readTimeout = 30000
+            setRequestProperty("Authorization", "Bearer $token")
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+            setRequestProperty("User-Agent", "heheconfig-android")
+            if (body != null) { doOutput = true; setRequestProperty("Content-Type", "application/json; charset=utf-8") }
+        }
+        try {
+            if (body != null) connection.outputStream.use { it.write(body.toString().toByteArray(Charsets.UTF_8)) }
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            if (code !in 200..299) throw Exception("GitHub API HTTP $code: $text")
+            return JSONObject(text)
+        } finally { connection.disconnect() }
+    }
+
+    private fun githubReadText(path: String): Pair<String, String> {
+        val json = githubRequest(path, "GET")
+        val content = String(Base64.decode(json.getString("content").replace("\\n", ""), Base64.DEFAULT), Charsets.UTF_8)
+        return content to json.getString("sha")
+    }
+
+    private fun githubWriteText(path: String, content: String, sha: String, message: String) {
+        val body = JSONObject().put("message", message)
+            .put("content", Base64.encodeToString(content.toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
+            .put("sha", sha).put("branch", "main")
+        githubRequest(path, "PUT", body)
+    }
+
+    private fun syncChannelsToGitHub() {
+        if (githubTokenValue().isBlank()) { say(t("channels_saved_local")); return }
+        val desired = channels.joinToString("\n", postfix = if (channels.isNotEmpty()) "\n" else "")
+        lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    val (old, sha) = githubReadText("telegram_channels.txt")
+                    val comments = old.lines().filter { it.trim().startsWith("#") || it.isBlank() }
+                    val merged = (comments + desired.lines().filter { it.isNotBlank() }).distinct().joinToString("\n").trimEnd() + "\n"
+                    if (old == merged) return@withContext "کانال‌ها از قبل همگام بودند"
+                    githubWriteText("telegram_channels.txt", merged, sha, "Update Telegram channels from Android")
+                    "کانال‌ها در GitHub همگام شدند ✅"
+                }
+                say(result)
+            } catch (e: Exception) { say(tf("error", e.message ?: "channel_sync_failed")) }
+        }
+    }
+
+    private fun publishWorkingConfigsToGitHub(failedGuids: List<String>) {
+        val failedUris = failedGuids.mapNotNull { githubConfigByGuid[it] }.toSet()
+        if (failedUris.isEmpty()) { say(t("no_github_configs_to_remove")); return }
+        lifecycleScope.launch {
+            try {
+                val remaining = withContext(Dispatchers.IO) {
+                    val (old, sha) = githubReadText("configs.json")
+                    val array = JSONArray(old)
+                    val kept = JSONArray()
+                    var removed = 0
+                    for (i in 0 until array.length()) {
+                        val value = array.optString(i).trim()
+                        if (value in failedUris) removed++ else kept.put(value)
+                    }
+                    if (removed > 0) githubWriteText("configs.json", kept.toString(2) + "\n", sha, "Remove failed configs after mobile ping test")
+                    removed
+                }
+                failedGuids.forEach { MmkvManager.removeServer(it) }
+                githubImportedGuids.removeAll(failedGuids.toSet())
+                failedGuids.forEach { githubConfigByGuid.remove(it) }
+                prefs.edit().putString("github_imported_guids", githubImportedGuids.joinToString("\n"))
+                    .putString("github_config_by_guid", JSONObject(githubConfigByGuid as Map<*, *>).toString()).apply()
+                say(tf("github_cleanup_done", failedGuids.size, remaining))
+            } catch (e: Exception) { say(tf("error", e.message ?: "github_cleanup_failed")) }
         }
     }
 
@@ -541,7 +628,16 @@ private val STR: Map<String, Map<String, String>> = mapOf(
         "no_channels" to "هنوز چنلی اضافه نکردی",
         "remove" to "حذف",
         "github_title" to "کانفیگ‌های GitHub",
-        "github_description" to "کانفیگ‌های عمومی configs.json را وارد کن؛ بعد تأخیر واقعی را تست و موارد ناموفق را حذف کن.",
+        "github_description" to "توکن GitHub با دسترسی Contents: Read/Write وارد کن. کانال‌ها و کانفیگ‌های تست‌شده با مخزن همگام می‌شوند.",
+        "github_token_hint" to "GitHub token (Contents read/write)",
+        "channels_saved_local" to "کانال‌ها ذخیره شدند؛ برای همگام‌سازی با GitHub توکن وارد کن.",
+        "github_import_progress" to "در حال واردکردن کانفیگ %d از %d ...",
+        "github_cleanup_title" to "پاک‌سازی GitHub",
+        "github_cleanup_confirm" to "%d کانفیگ موفق و %d ناموفق شدند. آیا کانفیگ‌های ناموفق از configs.json گیت‌هاب حذف شوند؟",
+        "github_cleanup_yes" to "حذف ناموفق‌ها از GitHub",
+        "cleanup_cancelled" to "پاک‌سازی لغو شد؛ چیزی از GitHub حذف نشد.",
+        "no_github_configs_to_remove" to "کانفیگ ناموفق به کانفیگ‌های GitHub نگاشت نشد؛ برای ایمنی چیزی حذف نشد.",
+        "github_cleanup_done" to "تمام شد: %d پروفایل ناموفق از گوشی حذف و %d کانفیگ از GitHub پاک شد.",
         "github_url_hint" to "آدرس JSON گیت‌هاب",
         "github_import_btn" to "دریافت کانفیگ‌ها از GitHub",
         "github_url_invalid" to "آدرس باید با https:// شروع شود",
@@ -611,7 +707,16 @@ private val STR: Map<String, Map<String, String>> = mapOf(
         "no_channels" to "No channels yet",
         "remove" to "Remove",
         "github_title" to "GitHub configs",
-        "github_description" to "Import configs.json, then test real delays and remove failed imports.",
+        "github_description" to "Enter a GitHub token with Contents read/write access. Channels and tested configs sync with the repository.",
+        "github_token_hint" to "GitHub token (Contents read/write)",
+        "channels_saved_local" to "Channels saved locally. Enter a GitHub token to sync them.",
+        "github_import_progress" to "Importing config %d of %d...",
+        "github_cleanup_title" to "GitHub cleanup",
+        "github_cleanup_confirm" to "%d configs succeeded and %d failed. Remove failed configs from GitHub configs.json?",
+        "github_cleanup_yes" to "Remove failed from GitHub",
+        "cleanup_cancelled" to "Cleanup cancelled; nothing was removed from GitHub.",
+        "no_github_configs_to_remove" to "Failed profiles could not be mapped to GitHub config entries; nothing was deleted for safety.",
+        "github_cleanup_done" to "Done: removed %d failed profiles locally and %d configs from GitHub.",
         "github_url_hint" to "GitHub JSON URL",
         "github_import_btn" to "Import configs from GitHub",
         "github_url_invalid" to "URL must start with https://",
