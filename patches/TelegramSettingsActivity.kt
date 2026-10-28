@@ -481,11 +481,23 @@ class TelegramSettingsActivity : AppCompatActivity() {
         }
     }
 
+    private fun compareVersions(a: String, b: String): Int {
+        fun parts(v: String) = v.trim().removePrefix("v").substringBefore("-").split(".").map { it.toIntOrNull() ?: 0 }
+        val left = parts(a)
+        val right = parts(b)
+        for (i in 0 until maxOf(left.size, right.size)) {
+            val x = left.getOrElse(i) { 0 }
+            val y = right.getOrElse(i) { 0 }
+            if (x != y) return x.compareTo(y)
+        }
+        return 0
+    }
+
     private fun checkAndInstallUpdate() {
         lifecycleScope.launch {
             say(t("update_checking"))
             try {
-                val apk = withContext(Dispatchers.IO) {
+                val result = withContext(Dispatchers.IO) {
                     val c = (URL("https://api.github.com/repos/kavirkobra69/heheconfig/releases/latest").openConnection() as HttpURLConnection).apply {
                         connectTimeout = 15000; readTimeout = 30000
                         setRequestProperty("Accept", "application/vnd.github+json")
@@ -495,6 +507,11 @@ class TelegramSettingsActivity : AppCompatActivity() {
                         if (c.responseCode !in 200..299) throw Exception("GitHub HTTP ${c.responseCode}")
                         JSONObject(c.inputStream.bufferedReader().use { it.readText() })
                     } finally { c.disconnect() }
+                    val latestVersion = release.optString("tag_name", "").removePrefix("v").trim()
+                    if (latestVersion.isBlank()) throw Exception("Latest Release has no version tag")
+                    val currentVersion = packageManager.getPackageInfo(packageName, 0).versionName ?: "0.0.0"
+                    val comparison = compareVersions(latestVersion, currentVersion)
+                    if (comparison <= 0) return@withContext Triple<File?, String, String>(null, currentVersion, latestVersion)
                     val assets = release.optJSONArray("assets") ?: JSONArray()
                     var downloadUrl = ""
                     var assetName = "heheconfig-update.apk"
@@ -503,13 +520,22 @@ class TelegramSettingsActivity : AppCompatActivity() {
                         val name = item.optString("name")
                         if (name.endsWith(".apk", true)) { downloadUrl = item.optString("browser_download_url"); assetName = name; break }
                     }
-                    if (downloadUrl.isBlank()) throw Exception("No APK asset in latest release")
+                    if (downloadUrl.isBlank()) throw Exception("Release v$latestVersion has no APK asset")
                     val outDir = File(cacheDir, "updates").apply { mkdirs() }
                     val out = File(outDir, assetName)
                     val d = (URL(downloadUrl).openConnection() as HttpURLConnection).apply { connectTimeout = 15000; readTimeout = 60000 }
-                    try { if (d.responseCode !in 200..299) throw Exception("APK download HTTP ${d.responseCode}"); d.inputStream.use { input -> out.outputStream().use { output -> input.copyTo(output) } } }
-                    finally { d.disconnect() }
-                    out
+                    try {
+                        if (d.responseCode !in 200..299) throw Exception("APK download HTTP ${d.responseCode}")
+                        d.inputStream.use { input -> out.outputStream().use { output -> input.copyTo(output) } }
+                    } finally { d.disconnect() }
+                    Triple(out, currentVersion, latestVersion)
+                }
+                val apk = result.first
+                if (apk == null) {
+                    say(if (compareVersions(result.second, result.third) == 0)
+                        "برنامه به‌روز است · نسخه ${result.second}"
+                    else "نسخه نصب‌شده (${result.second}) از آخرین نسخه انتشار (${result.third}) جدیدتر است.")
+                    return@launch
                 }
                 if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
                     say(t("update_unknown_sources"))
@@ -521,7 +547,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
                     setDataAndType(uri, "application/vnd.android.package-archive")
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
                 }
-                say(t("update_install"))
+                say("در حال نصب نسخه ${result.third}…")
                 startActivity(intent)
             } catch (e: Exception) { say(tf("update_error", e.message ?: "unknown")) }
         }
