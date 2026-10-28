@@ -111,6 +111,12 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private val telModeBtn by lazy { btn { mode = "telegram"; val id = prefs.getString("api_id", "")?.toIntOrNull(); val hash = prefs.getString("api_hash", "") ?: ""; if (id != null && hash.isNotBlank()) TelegramManager.start(this, id, hash); render() } }
     private val homeBtn by lazy { btn { mode = null; render() } }
     private val updateBtn by lazy { btn { checkAndInstallUpdate() } }
+    private val adminModeBtn by lazy { btn { mode = "admin"; render() } }
+    private val adminLoginBtn by lazy { btn { loginGitHubAdmin() } }
+    private val adminReposBtn by lazy { btn { loadGitHubRepositories() } }
+    private val adminRepairBtn by lazy { btn { repairSelectedConfigFile() } }
+    private val adminConfigPath by lazy { edit("admin_config_path").apply { hint = "configs.json / config.json path" } }
+    private val adminRepoLabel by lazy { label("Repository not selected") }
 
     private val langBtn by lazy {
         btn {
@@ -307,14 +313,33 @@ class TelegramSettingsActivity : AppCompatActivity() {
             root.addView(label(t("home_description")))
             githubModeBtn.text = "GitHub"
             telModeBtn.text = "TelAccount"
+            adminModeBtn.text = "Admin / Repository Manager"
             root.addView(githubModeBtn)
             root.addView(telModeBtn)
+            root.addView(adminModeBtn)
             root.addView(status)
             return
         }
 
         homeBtn.text = t("back_home")
         root.addView(homeBtn)
+
+        if (mode == "admin") {
+            root.addView(title("GitHub Admin"))
+            root.addView(label("Enter a GitHub token; it will be saved on this device."))
+            root.addView(githubToken)
+            adminLoginBtn.text = "Save token and sign in"
+            root.addView(adminLoginBtn)
+            adminReposBtn.text = "Load my repositories"
+            root.addView(adminReposBtn)
+            root.addView(adminRepoLabel)
+            root.addView(label("Select a repository. The app will find configs.json or config.json automatically."))
+            root.addView(adminConfigPath)
+            adminRepairBtn.text = "Validate / repair config JSON"
+            root.addView(adminRepairBtn)
+            root.addView(status)
+            return
+        }
 
         if (mode == "telegram") {
             root.addView(title(t("tg_title")))
@@ -376,6 +401,9 @@ class TelegramSettingsActivity : AppCompatActivity() {
         lang = prefs.getString("lang", "fa") ?: "fa"
         range = prefs.getInt("range", 0)
         channels.addAll(prefs.getString("channels_v2", "")!!.lines().filter { it.isNotBlank() })
+        githubToken.setText(prefs.getString("github_token", "") ?: "")
+        adminConfigPath.setText(prefs.getString("admin_config_path", "") ?: "")
+        adminRepoLabel.text = "Selected repository: " + selectedRepository()
         githubImportedGuids.addAll((prefs.getString("github_imported_guids", "") ?: "").lines().filter { it.isNotBlank() })
         try { val saved = JSONObject(prefs.getString("github_config_by_guid", "{}") ?: "{}"); saved.keys().forEach { k -> githubConfigByGuid[k] = saved.optString(k) } } catch (_: Exception) {}
 
@@ -592,10 +620,12 @@ class TelegramSettingsActivity : AppCompatActivity() {
 
     private fun githubTokenValue(): String = (githubToken.text.toString().trim().ifEmpty { prefs.getString("github_token", "") ?: "" })
 
+    private fun selectedRepository(): String = prefs.getString("admin_repo_full_name", "kavirkobra69/heheconfig") ?: "kavirkobra69/heheconfig"
+
     private fun githubRequest(path: String, method: String, body: JSONObject? = null): JSONObject {
         val token = githubTokenValue()
         if (token.isBlank()) throw Exception("GitHub token را وارد کن")
-        val url = URL("https://api.github.com/repos/kavirkobra69/heheconfig/contents/$path")
+        val url = URL("https://api.github.com/repos/" + selectedRepository() + "/contents/" + path)
         val connection = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method; connectTimeout = 15000; readTimeout = 30000
             setRequestProperty("Authorization", "Bearer $token")
@@ -612,6 +642,160 @@ class TelegramSettingsActivity : AppCompatActivity() {
             if (code !in 200..299) throw Exception("GitHub API HTTP $code: $text")
             return JSONObject(text)
         } finally { connection.disconnect() }
+    }
+
+    private fun githubApi(urlText: String): String {
+        val token = githubTokenValue()
+        if (token.isBlank()) throw Exception("Enter a GitHub token first")
+        val connection = (URL(urlText).openConnection() as HttpURLConnection).apply {
+            connectTimeout = 15000; readTimeout = 30000
+            setRequestProperty("Authorization", "Bearer " + token)
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+            setRequestProperty("User-Agent", "heheconfig-android-admin")
+        }
+        try {
+            val code = connection.responseCode
+            val stream = if (code in 200..299) connection.inputStream else connection.errorStream
+            val text = stream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+            if (code !in 200..299) throw Exception("GitHub API HTTP " + code + ": " + text)
+            return text
+        } finally { connection.disconnect() }
+    }
+
+    private fun loginGitHubAdmin() {
+        val token = githubToken.text.toString().trim()
+        if (token.isBlank()) { say("Enter your GitHub token first."); return }
+        prefs.edit().putString("github_token", token).apply()
+        lifecycleScope.launch {
+            try {
+                val user = withContext(Dispatchers.IO) { JSONObject(githubApi("https://api.github.com/user")) }
+                say("Signed in as @" + user.optString("login") + ". Token saved on this device.")
+            } catch (e: Exception) { say("Sign-in failed: " + (e.message ?: "unknown error")) }
+        }
+    }
+
+    private fun loadGitHubRepositories() {
+        val token = githubToken.text.toString().trim()
+        if (token.isNotBlank()) prefs.edit().putString("github_token", token).apply()
+        if (githubTokenValue().isBlank()) { say("Enter and save your GitHub token first."); return }
+        lifecycleScope.launch {
+            try {
+                val repos = withContext(Dispatchers.IO) {
+                    val array = JSONArray(githubApi("https://api.github.com/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator,organization_member"))
+                    val names = mutableListOf<String>()
+                    for (i in 0 until array.length()) {
+                        val item = array.optJSONObject(i) ?: continue
+                        val full = item.optString("full_name")
+                        if (full.isNotBlank()) names.add(full)
+                    }
+                    names
+                }
+                if (repos.isEmpty()) { say("No repositories returned. Check token permissions."); return@launch }
+                val current = selectedRepository()
+                AlertDialog.Builder(this@TelegramSettingsActivity)
+                    .setTitle("Select repository")
+                    .setSingleChoiceItems(repos.toTypedArray(), repos.indexOf(current).coerceAtLeast(0)) { dialog, which ->
+                        val repo = repos[which]
+                        prefs.edit().putString("admin_repo_full_name", repo).apply()
+                        adminRepoLabel.text = "Selected repository: " + repo
+                        dialog.dismiss()
+                        discoverConfigPath(repo)
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
+                adminRepoLabel.text = "Current repository: " + current
+                say("Loaded " + repos.size + " repositories.")
+            } catch (e: Exception) { say("Could not load repositories: " + (e.message ?: "unknown error")) }
+        }
+    }
+
+    private fun discoverConfigPath(repo: String) {
+        lifecycleScope.launch {
+            try {
+                val path = withContext(Dispatchers.IO) {
+                    val tree = JSONObject(githubApi("https://api.github.com/repos/" + repo + "/git/trees/HEAD?recursive=1")).optJSONArray("tree") ?: JSONArray()
+                    val candidates = mutableListOf<String>()
+                    for (i in 0 until tree.length()) {
+                        val item = tree.optJSONObject(i) ?: continue
+                        if (item.optString("type") != "blob") continue
+                        val p = item.optString("path")
+                        val name = p.substringAfterLast("/")
+                        if (name.equals("configs.json", true) || name.equals("config.json", true)) candidates.add(p)
+                    }
+                    candidates.sortedWith(compareBy<String>({ if (it == "configs.json") 0 else if (it == "config.json") 1 else 2 }, { it.count { c -> c == '/' } }, { it })).firstOrNull()
+                        ?: throw Exception("No configs.json or config.json found.")
+                }
+                prefs.edit().putString("admin_config_path", path).apply()
+                adminConfigPath.setText(path)
+                say("Found config file: " + path)
+            } catch (e: Exception) { say("Could not find config file: " + (e.message ?: "unknown error")) }
+        }
+    }
+
+    private fun repairSelectedConfigFile() {
+        val path = adminConfigPath.text.toString().trim()
+        if (path.isBlank()) { say("Select a repository and config file first."); return }
+        prefs.edit().putString("admin_config_path", path).apply()
+        lifecycleScope.launch {
+            try {
+                val result = withContext(Dispatchers.IO) {
+                    val file = githubRequest(path, "GET")
+                    val raw = String(Base64.decode(file.optString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT), Charsets.UTF_8)
+                    val sha = file.getString("sha")
+                    val strictPattern = Regex("(?i)^(vmess|vless|trojan|ss|hysteria2|hy2|tuic)://\\S+$")
+                    try {
+                        val parsed = JSONArray(raw)
+                        val cleaned = JSONArray()
+                        val seen = linkedSetOf<String>()
+                        for (i in 0 until parsed.length()) {
+                            val value = parsed.optString(i).trim()
+                            if (strictPattern.matches(value) && seen.add(value)) cleaned.put(value)
+                        }
+                        if (cleaned.length() == parsed.length() && raw.trim() == cleaned.toString(2)) {
+                            return@withContext "JSON is valid; " + cleaned.length() + " configs found."
+                        }
+                        runOnUiThread {
+                            AlertDialog.Builder(this@TelegramSettingsActivity)
+                                .setTitle("Normalize config JSON?")
+                                .setMessage("Found " + cleaned.length() + " valid unique links. Remove invalid/duplicate entries and format the file?")
+                                .setNegativeButton("Cancel", null)
+                                .setPositiveButton("Repair") { _, _ ->
+                                    lifecycleScope.launch {
+                                        try {
+                                            withContext(Dispatchers.IO) { githubWriteText(path, cleaned.toString(2) + "\n", sha, "Normalize config JSON from Android admin") }
+                                            say("Config JSON normalized: " + cleaned.length() + " valid configs.")
+                                        } catch (e: Exception) { say("Save failed: " + (e.message ?: "unknown error")) }
+                                    }
+                                }.show()
+                        }
+                        "Valid JSON checked. Confirm the proposed cleanup in the dialog."
+                    } catch (_: Exception) {
+                        val loose = Regex("(?i)(vmess|vless|trojan|ss|hysteria2|hy2|tuic)://[^\\s<>\\\"']+")
+                        val found = loose.findAll(raw).map { it.value.trim().trimEnd(',', '.', ';', ')', ']') }.distinct().toList()
+                        if (found.isEmpty()) throw Exception("Malformed JSON; no recognizable config links recovered. File left unchanged.")
+                        val repaired = JSONArray()
+                        found.forEach { repaired.put(it) }
+                        runOnUiThread {
+                            AlertDialog.Builder(this@TelegramSettingsActivity)
+                                .setTitle("Repair malformed config JSON?")
+                                .setMessage("JSON parsing failed. Recovered " + found.size + " possible links. Replace the file with a clean JSON array?")
+                                .setNegativeButton("Cancel", null)
+                                .setPositiveButton("Repair file") { _, _ ->
+                                    lifecycleScope.launch {
+                                        try {
+                                            withContext(Dispatchers.IO) { githubWriteText(path, repaired.toString(2) + "\n", sha, "Repair malformed config JSON from Android admin") }
+                                            say("Repaired config JSON; saved " + found.size + " links.")
+                                        } catch (e: Exception) { say("Save failed: " + (e.message ?: "unknown error")) }
+                                    }
+                                }.show()
+                        }
+                        "Recovered " + found.size + " candidates. Confirm before saving."
+                    }
+                }
+                say(result)
+            } catch (e: Exception) { say("Config check/repair failed: " + (e.message ?: "unknown error")) }
+        }
     }
 
     private fun githubReadText(path: String): Pair<String, String> {
