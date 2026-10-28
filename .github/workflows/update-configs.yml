@@ -5,6 +5,12 @@ on:
     # Every six hours; offset from the top of the hour to reduce queue delays.
     - cron: "17 */6 * * *"
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "scripts/collect_telegram_configs.py"
+      - "telegram_channels.txt"
+      - ".github/workflows/update-configs.yml"
 
 permissions:
   contents: write
