@@ -52,7 +52,9 @@ provider = """        <provider
                 android:resource="@xml/heheconfig_file_paths" />
         </provider>
 """
-if "androidx.core.content.FileProvider" not in manifest_text:
+# Check the exact authority and metadata, not merely the provider class name:
+# upstream may already declare another FileProvider for a different authority.
+if 'android:authorities="${applicationId}.fileprovider"' not in manifest_text or "android.support.FILE_PROVIDER_PATHS" not in manifest_text or "@xml/heheconfig_file_paths" not in manifest_text:
     manifest_text = manifest_text.replace("</application>", provider + "    </application>", 1)
 manifest.write_text(manifest_text, encoding="utf-8")
 xml_dir = app / "src/main/res/xml"
