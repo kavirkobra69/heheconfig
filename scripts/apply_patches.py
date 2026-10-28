@@ -28,7 +28,7 @@ for source in required:
 
 # Add FileProvider support for installing APK updates downloaded inside the app.
 manifest_text = manifest.read_text(encoding="utf-8")
-permission = '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\\n'
+permission = '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\n'
 if "android.permission.REQUEST_INSTALL_PACKAGES" not in manifest_text:
     app_marker = "    <application"
     if app_marker not in manifest_text:
@@ -50,7 +50,7 @@ manifest.write_text(manifest_text, encoding="utf-8")
 xml_dir = app / "src/main/res/xml"
 xml_dir.mkdir(parents=True, exist_ok=True)
 (xml_dir / "heheconfig_file_paths.xml").write_text(
-    '<?xml version="1.0" encoding="utf-8"?>\\n<paths xmlns:android="http://schemas.android.com/apk/res/android">\\n    <cache-path name="update_apks" path="updates/" />\\n</paths>\\n',
+    '<?xml version="1.0" encoding="utf-8"?>\n<paths xmlns:android="http://schemas.android.com/apk/res/android">\n    <cache-path name="update_apks" path="updates/" />\n</paths>\n',
     encoding="utf-8",
 )
 
