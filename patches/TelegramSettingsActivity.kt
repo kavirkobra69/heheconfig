@@ -123,6 +123,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private val githubModeBtn by lazy { btn { mode = "github"; render() } }
     private val telModeBtn by lazy { btn { mode = "telegram"; val id = prefs.getString("api_id", "")?.toIntOrNull(); val hash = prefs.getString("api_hash", "") ?: ""; if (id != null && hash.isNotBlank()) TelegramManager.start(this, id, hash); render() } }
     private val homeBtn by lazy { btn { mode = null; render() } }
+    private val settingsBtn by lazy { btn { mode = "settings"; render() } }
     private val updateBtn by lazy { btn { checkAndInstallUpdate() } }
     private val adminModeBtn by lazy { btn { mode = "admin"; render() } }
     private val adminLoginBtn by lazy { btn { loginGitHubAdmin() } }
@@ -331,10 +332,6 @@ class TelegramSettingsActivity : AppCompatActivity() {
         val hasCreds = !prefs.getString("api_id", "").isNullOrEmpty() &&
                 !prefs.getString("api_hash", "").isNullOrEmpty()
 
-        root.addView(langBtn)
-        updateBtn.text = t("check_update")
-        root.addView(updateBtn)
-
         if (mode == null) {
             root.addView(title(t("home_title")))
             root.addView(label(t("home_description")))
@@ -344,12 +341,32 @@ class TelegramSettingsActivity : AppCompatActivity() {
             root.addView(githubModeBtn)
             root.addView(telModeBtn)
             root.addView(adminModeBtn)
+            settingsBtn.text = if (lang == "fa") "⚙ تنظیمات" else "⚙ Settings"
+            root.addView(settingsBtn)
             root.addView(status)
             return
         }
 
         homeBtn.text = t("back_home")
         root.addView(homeBtn)
+
+        if (mode == "settings") {
+            root.addView(title(if (lang == "fa") "تنظیمات برنامه" else "App settings"))
+            root.addView(langBtn)
+            updateBtn.text = t("check_update")
+            root.addView(updateBtn)
+            root.addView(title(if (lang == "fa") "تنظیمات GitHub" else "GitHub settings"))
+            root.addView(label(t("github_url_hint")))
+            root.addView(githubJsonUrl)
+            root.addView(label(t("github_token_hint")))
+            root.addView(githubToken)
+            root.addView(rangeBtn)
+            root.addView(title(if (lang == "fa") "تنظیمات تلگرام / Worker" else "Telegram / Worker settings"))
+            root.addView(workerUrl)
+            root.addView(saveWorkerBtn)
+            root.addView(status)
+            return
+        }
 
         if (mode == "admin") {
             root.addView(title("GitHub Admin"))
@@ -400,9 +417,6 @@ class TelegramSettingsActivity : AppCompatActivity() {
         if (mode == "github") {
             root.addView(title(t("github_title")))
             root.addView(label(t("github_description")))
-            root.addView(githubJsonUrl)
-            root.addView(githubToken)
-            root.addView(rangeBtn)
             root.addView(publishTelegramConfigsBtn)
             root.addView(githubImportBtn)
             root.addView(testRealDelaysBtn)
