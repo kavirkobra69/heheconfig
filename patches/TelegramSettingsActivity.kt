@@ -4,6 +4,9 @@ import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.graphics.Typeface
+import android.graphics.Color
+import android.graphics.drawable.GradientDrawable
+import androidx.appcompat.app.AlertDialog
 import android.os.Bundle
 import android.text.InputType
 import android.view.View
@@ -13,9 +16,18 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import com.v2ray.ang.dto.RealPingEvent
+import com.v2ray.ang.handler.MmkvManager
+import com.v2ray.ang.service.RealPingWorkerService
 import androidx.lifecycle.lifecycleScope
 import com.v2ray.ang.handler.AngConfigManager // اگه ارور داد: com.v2ray.ang.util.AngConfigManager
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.json.JSONArray
+import java.net.HttpURLConnection
+import java.net.URL
+import java.util.concurrent.ConcurrentHashMap
 
 class TelegramSettingsActivity : AppCompatActivity() {
 
@@ -24,6 +36,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private var lang = "fa"
     private var range = 0
     private val log = StringBuilder()
+    private val githubImportedGuids = mutableListOf<String>()
 
     private lateinit var root: LinearLayout
     private lateinit var status: TextView
@@ -35,20 +48,41 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private fun t(k: String): String = STR[lang]?.get(k) ?: k
     private fun tf(k: String, vararg a: Any?): String = String.format(t(k), *a)
 
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    private fun rounded(color: Int, radiusDp: Int = 14): GradientDrawable =
+        GradientDrawable().apply { setColor(color); cornerRadius = dp(radiusDp).toFloat() }
+
     private fun edit(key: String, type: Int = InputType.TYPE_CLASS_TEXT) =
         EditText(this).apply {
             inputType = type
             if (key.isNotEmpty()) setText(prefs.getString(key, ""))
+            setTextColor(Color.WHITE)
+            setHintTextColor(Color.rgb(166, 166, 190))
+            textSize = 14f
+            background = rounded(Color.rgb(37, 35, 55), 12)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
         }
 
-    private fun btn(onClick: () -> Unit) =
-        Button(this).apply { setOnClickListener { onClick() } }
-
-    private fun title(s: String) = TextView(this).apply {
-        text = s; textSize = 18f; setTypeface(null, Typeface.BOLD); setPadding(0, 48, 0, 12)
+    private fun btn(onClick: () -> Unit) = Button(this).apply {
+        setOnClickListener { onClick() }
+        isAllCaps = false
+        textSize = 14f
+        setTextColor(Color.WHITE)
+        background = rounded(Color.rgb(111, 66, 193), 14)
+        setPadding(dp(12), dp(8), dp(12), dp(8))
+        elevation = dp(2).toFloat()
     }
 
-    private fun label(s: String) = TextView(this).apply { text = s; setPadding(0, 8, 0, 8) }
+    private fun title(s: String) = TextView(this).apply {
+        text = s; textSize = 18f; setTextColor(Color.WHITE)
+        setTypeface(null, Typeface.BOLD); setPadding(0, dp(26), 0, dp(10))
+    }
+
+    private fun label(s: String) = TextView(this).apply {
+        text = s; textSize = 14f; setTextColor(Color.rgb(195, 192, 215))
+        setPadding(0, dp(6), 0, dp(6))
+    }
 
     private val apiId by lazy { edit("api_id", InputType.TYPE_CLASS_NUMBER) }
     private val apiHash by lazy { edit("api_hash") }
@@ -58,6 +92,9 @@ class TelegramSettingsActivity : AppCompatActivity() {
         edit("", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD)
     }
     private val workerUrl by lazy { edit("worker_url") }
+    private val githubJsonUrl by lazy { edit("github_json_url").apply {
+        if (text.isNullOrBlank()) setText("https://raw.githubusercontent.com/kavirkobra69/heheconfig/main/configs.json")
+    } }
     private val newChannel by lazy { edit("") }
 
     // ---------- دکمه‌ها ----------
@@ -115,6 +152,8 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private val exportBackupBtn by lazy { btn { startBackupExport() } }
     private val importBackupBtn by lazy { btn { startBackupImport() } }
     private val addBtn by lazy { btn { addChannel() } }
+    private val githubImportBtn by lazy { btn { importFromGitHub() } }
+    private val testRealDelaysBtn by lazy { btn { confirmAndTestGitHubConfigs() } }
 
     private val rangeBtn by lazy {
         btn { range = (range + 1) % 3; savePrefs(); render() }
@@ -224,6 +263,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         code.hint = t("code_hint")
         password.hint = t("pw_hint")
         workerUrl.hint = t("worker_hint")
+        githubJsonUrl.hint = t("github_url_hint")
         newChannel.hint = t("channel_hint")
         sendBtn.text = t("send_code")
         loginBtn.text = t("login")
@@ -232,6 +272,8 @@ class TelegramSettingsActivity : AppCompatActivity() {
         addBtn.text = t("add_channel")
         rangeBtn.text = tf("range_label", t("range$range"))
         importBtn.text = t("import_btn")
+        githubImportBtn.text = t("github_import_btn")
+        testRealDelaysBtn.text = t("test_real_delays")
         backupPassword.hint = t("backup_password")
         exportBackupBtn.text = t("backup_export")
         importBackupBtn.text = t("backup_import")
@@ -263,6 +305,12 @@ class TelegramSettingsActivity : AppCompatActivity() {
         root.addView(channelList)
         refreshChannels()
 
+        root.addView(title(t("github_title")))
+        root.addView(label(t("github_description")))
+        root.addView(githubJsonUrl)
+        root.addView(githubImportBtn)
+        root.addView(testRealDelaysBtn)
+
         root.addView(title(t("import_title")))
         root.addView(rangeBtn)
         root.addView(importBtn)
@@ -278,7 +326,14 @@ class TelegramSettingsActivity : AppCompatActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         title = "Telegram Import"
-        root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(40, 40, 40, 80) }
+        root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(18), dp(20), dp(40))
+            background = GradientDrawable(
+                GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(Color.rgb(18, 17, 29), Color.rgb(30, 20, 45), Color.rgb(18, 17, 29))
+            )
+        }
         status = TextView(this).apply { setPadding(0, 24, 0, 24) }
         channelList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         setContentView(ScrollView(this).apply { addView(root) })
@@ -286,6 +341,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         lang = prefs.getString("lang", "fa") ?: "fa"
         range = prefs.getInt("range", 0)
         channels.addAll(prefs.getString("channels_v2", "")!!.lines().filter { it.isNotBlank() })
+        githubImportedGuids.addAll((prefs.getString("github_imported_guids", "") ?: "").lines().filter { it.isNotBlank() })
 
         // اگه قبلاً لاگین کردی خودکار وصل می‌شه
         val id = prefs.getString("api_id", "")?.toIntOrNull()
@@ -349,6 +405,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
                         apiHash.setText(prefs.getString("api_hash", ""))
                         phone.setText(prefs.getString("phone", ""))
                         workerUrl.setText(prefs.getString("worker_url", ""))
+                        githubJsonUrl.setText(prefs.getString("github_json_url", "https://raw.githubusercontent.com/kavirkobra69/heheconfig/main/configs.json"))
                         channels.clear()
                         channels.addAll((prefs.getString("channels_v2", "") ?: "").lines().filter { it.isNotBlank() })
                         range = prefs.getInt("range", 0)
@@ -370,6 +427,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
             .putString("api_hash", apiHash.text.toString().trim())
             .putString("phone", phone.text.toString().trim())
             .putString("worker_url", workerUrl.text.toString().trim())
+            .putString("github_json_url", githubJsonUrl.text.toString().trim())
             .putString("channels_v2", channels.joinToString("\n"))
             .putInt("range", range)
             .apply()
@@ -377,11 +435,89 @@ class TelegramSettingsActivity : AppCompatActivity() {
 
     private fun say(s: String) { status.text = s }
 
-    /** ⚠️ تنها خطی که ممکنه با نسخه v2rayNG تو فرق کنه (امضای تابع ایمپورت) */
-    private fun importIntoV2ray(text: String) {
-        val r: Any? = AngConfigManager.importBatchConfig(text, "", true)
-        println("import result: $r")
+    private fun importFromGitHub() {
+        val source = githubJsonUrl.text.toString().trim()
+        if (!source.startsWith("https://")) { say(t("github_url_invalid")); return }
+        savePrefs()
+        lifecycleScope.launch {
+            say(t("github_loading"))
+            try {
+                val configs = withContext(Dispatchers.IO) {
+                    val connection = (URL(source).openConnection() as HttpURLConnection).apply {
+                        requestMethod = "GET"
+                        connectTimeout = 15000
+                        readTimeout = 30000
+                        setRequestProperty("User-Agent", "heheconfig-android")
+                        setRequestProperty("Accept", "application/json")
+                    }
+                    try {
+                        val code = connection.responseCode
+                        if (code !in 200..299) throw Exception("HTTP $code")
+                        val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }
+                        val array = JSONArray(body)
+                        val found = LinkedHashSet<String>()
+                        val pattern = Regex("""(?i)^(vmess|vless|trojan|ss|hysteria2|hy2|tuic)://\S+$""")
+                        for (i in 0 until array.length()) {
+                            val value = array.optString(i).trim()
+                            if (pattern.matches(value)) found.add(value)
+                        }
+                        found.toList()
+                    } finally { connection.disconnect() }
+                }
+                if (configs.isEmpty()) { say(t("github_empty")); return@launch }
+                val before = MmkvManager.decodeAllServerList().toSet()
+                val result = importIntoV2ray(configs.joinToString("\n"))
+                val after = MmkvManager.decodeAllServerList().toSet()
+                val newIds = after - before
+                githubImportedGuids.clear()
+                githubImportedGuids.addAll(newIds)
+                prefs.edit().putString("github_imported_guids", newIds.joinToString("\n")).apply()
+                say(tf("github_imported", result.first, newIds.size))
+            } catch (e: Exception) {
+                say(tf("error", e.message ?: "github_import_failed"))
+            }
+        }
     }
+
+    private fun confirmAndTestGitHubConfigs() {
+        val ids = githubImportedGuids.toList()
+        if (ids.isEmpty()) { say(t("test_import_first")); return }
+        AlertDialog.Builder(this)
+            .setTitle(t("test_real_delays"))
+            .setMessage(t("test_confirm_message"))
+            .setNegativeButton(t("cancel"), null)
+            .setPositiveButton(t("test_start")) { _, _ -> testGitHubConfigs(ids) }
+            .show()
+    }
+
+    private fun testGitHubConfigs(ids: List<String>) {
+        val targets = ids.distinct().filter { MmkvManager.decodeServerConfig(it) != null }
+        if (targets.isEmpty()) { say(t("test_import_first")); return }
+        val successful = ConcurrentHashMap.newKeySet<String>()
+        say(tf("test_started", targets.size))
+        try {
+            RealPingWorkerService(this, targets) { event ->
+                when (event) {
+                    is RealPingEvent.Result -> if (event.delayMillis >= 0L) successful.add(event.guid)
+                    is RealPingEvent.Progress -> runOnUiThread { say(tf("test_progress", successful.size, targets.size)) }
+                    is RealPingEvent.Finish -> runOnUiThread {
+                        val failed = targets.filterNot { successful.contains(it) }
+                        failed.forEach { MmkvManager.removeServer(it) }
+                        githubImportedGuids.clear()
+                        githubImportedGuids.addAll(successful)
+                        prefs.edit().putString("github_imported_guids", successful.joinToString("\n")).apply()
+                        say(tf("test_finished", successful.size, failed.size))
+                    }
+                }
+            }.start()
+        } catch (e: Exception) {
+            say(tf("error", e.message ?: "test_failed"))
+        }
+    }
+
+    /** Import the config list through v2rayNG's own parser and profile storage. */
+    private fun importIntoV2ray(text: String): Pair<Int, Int> =
+        AngConfigManager.importBatchConfig(text, "", true)
 }
 
 private val STR: Map<String, Map<String, String>> = mapOf(
@@ -404,7 +540,23 @@ private val STR: Map<String, Map<String, String>> = mapOf(
         "add_channel" to "افزودن چنل",
         "no_channels" to "هنوز چنلی اضافه نکردی",
         "remove" to "حذف",
-        "import_title" to "ایمپورت",
+        "github_title" to "کانفیگ‌های GitHub",
+        "github_description" to "کانفیگ‌های عمومی configs.json را وارد کن؛ بعد تأخیر واقعی را تست و موارد ناموفق را حذف کن.",
+        "github_url_hint" to "آدرس JSON گیت‌هاب",
+        "github_import_btn" to "دریافت کانفیگ‌ها از GitHub",
+        "github_url_invalid" to "آدرس باید با https:// شروع شود",
+        "github_loading" to "در حال دریافت configs.json ...",
+        "github_empty" to "کانفیگ معتبری در JSON پیدا نشد",
+        "github_imported" to "%d کانفیگ شناسایی و %d مورد به برنامه اضافه شد ✅",
+        "test_real_delays" to "Test real delays",
+        "test_confirm_message" to "همه کانفیگ‌های تازه‌واردشده از GitHub تست می‌شوند. کانفیگ‌هایی که تست واقعی‌شان شکست بخورد حذف خواهند شد.",
+        "cancel" to "لغو",
+        "test_start" to "شروع تست",
+        "test_import_first" to "اول کانفیگ‌ها را از GitHub وارد کن",
+        "test_started" to "در حال تست واقعی %d کانفیگ...",
+        "test_progress" to "تست ادامه دارد؛ %d کانفیگ موفق از %d بررسی‌شده",
+        "test_finished" to "تست تمام شد: %d کانفیگ سالم نگه داشته شد؛ %d کانفیگ ناموفق حذف شد.",
+        "import_title" to "ایمپورت تلگرام",
         "range_label" to "بازه: %s",
         "range0" to "امروز",
         "range1" to "۲۴ ساعت اخیر",
@@ -458,7 +610,23 @@ private val STR: Map<String, Map<String, String>> = mapOf(
         "add_channel" to "Add channel",
         "no_channels" to "No channels yet",
         "remove" to "Remove",
-        "import_title" to "Import",
+        "github_title" to "GitHub configs",
+        "github_description" to "Import configs.json, then test real delays and remove failed imports.",
+        "github_url_hint" to "GitHub JSON URL",
+        "github_import_btn" to "Import configs from GitHub",
+        "github_url_invalid" to "URL must start with https://",
+        "github_loading" to "Downloading configs.json...",
+        "github_empty" to "No valid configs found in JSON",
+        "github_imported" to "%d configs parsed; %d new profiles added ✅",
+        "test_real_delays" to "Test real delays",
+        "test_confirm_message" to "All configs just imported from GitHub will be tested. Imports that fail the real delay test will be removed.",
+        "cancel" to "Cancel",
+        "test_start" to "Start test",
+        "test_import_first" to "Import configs from GitHub first",
+        "test_started" to "Testing %d configs with real delay...",
+        "test_progress" to "Test running; %d configs succeeded out of %d checked",
+        "test_finished" to "Finished: kept %d working configs; removed %d failed configs.",
+        "import_title" to "Telegram import",
         "range_label" to "Range: %s",
         "range0" to "Today",
         "range1" to "Last 24 hours",
