@@ -173,6 +173,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private val importBackupBtn by lazy { btn { startBackupImport() } }
     private val addBtn by lazy { btn { addChannel() } }
     private val githubImportBtn by lazy { btn { importFromGitHub() } }
+    private val publishTelegramConfigsBtn by lazy { btn { importTelegramConfigsToGitHubJson() } }
     private val testRealDelaysBtn by lazy { btn { confirmAndTestGitHubConfigs() } }
 
     private val rangeBtn by lazy {
@@ -295,6 +296,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         rangeBtn.text = tf("range_label", t("range$range"))
         importBtn.text = t("import_btn")
         githubImportBtn.text = t("github_import_btn")
+        publishTelegramConfigsBtn.text = "Import Telegram configs → config.json"
         testRealDelaysBtn.text = t("test_real_delays")
         backupPassword.hint = t("backup_password")
         exportBackupBtn.text = t("backup_export")
@@ -333,7 +335,10 @@ class TelegramSettingsActivity : AppCompatActivity() {
             adminReposBtn.text = "Load my repositories"
             root.addView(adminReposBtn)
             root.addView(adminRepoLabel)
-            root.addView(label("Select a repository. The app will find configs.json or config.json automatically."))
+            root.addView(label("Select a repository. The app will find configs.json or config.json automatically; no path typing is needed."))
+            adminConfigPath.isFocusable = false
+            adminConfigPath.isFocusableInTouchMode = false
+            adminConfigPath.isClickable = false
             root.addView(adminConfigPath)
             adminRepairBtn.text = "Validate / repair config JSON"
             root.addView(adminRepairBtn)
@@ -368,6 +373,8 @@ class TelegramSettingsActivity : AppCompatActivity() {
             root.addView(label(t("github_description")))
             root.addView(githubJsonUrl)
             root.addView(githubToken)
+            root.addView(rangeBtn)
+            root.addView(publishTelegramConfigsBtn)
             root.addView(githubImportBtn)
             root.addView(testRealDelaysBtn)
         } else {
