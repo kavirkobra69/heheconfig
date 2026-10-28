@@ -23,6 +23,7 @@ import androidx.lifecycle.lifecycleScope
 import com.v2ray.ang.handler.AngConfigManager // اگه ارور داد: com.v2ray.ang.util.AngConfigManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
