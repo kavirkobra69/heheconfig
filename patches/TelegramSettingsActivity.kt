@@ -297,7 +297,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         rangeBtn.text = if (lang == "fa") "بازه: " + listOf("امروز", "۲۴ ساعت اخیر", "۳ روز اخیر")[range.coerceIn(0, 2)] else tf("range_label", t("range$range"))
         importBtn.text = t("import_btn")
         githubImportBtn.text = t("github_import_btn")
-        publishTelegramConfigsBtn.text = "Import Telegram configs → config.json"
+        publishTelegramConfigsBtn.text = if (lang == "fa") "ایمپورت کانفیگ‌ها از تلگرام" else "Import configs from Telegram"
         testRealDelaysBtn.text = t("test_real_delays")
         backupPassword.hint = t("backup_password")
         exportBackupBtn.text = t("backup_export")
