@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Collect V2Ray-compatible links from recent public Telegram channel previews."""
+"""Collect V2Ray-compatible links from public Telegram channel previews."""
 import json
 import re
 import sys
@@ -13,9 +13,8 @@ from html import unescape
 ROOT = Path(__file__).resolve().parent.parent
 CHANNELS_FILE = ROOT / "telegram_channels.txt"
 OUTPUT_FILE = ROOT / "configs.json"
-LINK_RE = re.compile(r"(?:vmess|vless|trojan|ss|hysteria2|hy2|tuic)://[^\s<>\"'\x60]+", re.I)
+LINK_RE = re.compile(r"(?:vmess|vless|trojan|ss|hysteria2|hy2|tuic)://[^\s<>\\"'\x60]+", re.I)
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
-# Scan several pages on every run so the first run can import older posts too.
 MAX_PAGES_PER_CHANNEL = 12
 
 
@@ -28,7 +27,11 @@ def clean_html(value: str) -> str:
 def get_html(url: str) -> str:
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"},
+        headers={
+            "User-Agent": UA,
+            "Accept-Language": "en-US,en;q=0.9",
+            "Cache-Control": "no-cache",
+        },
     )
     with urllib.request.urlopen(request, timeout=25) as response:
         return response.read().decode("utf-8", errors="replace")
@@ -51,6 +54,10 @@ def read_channels():
     return list(dict.fromkeys(channels))
 
 
+def extract_links(text: str):
+    return {link.rstrip(".,;)}]") for link in LINK_RE.findall(clean_html(text))}
+
+
 def collect_channel(channel: str):
     found = set()
     before = None
@@ -59,38 +66,42 @@ def collect_channel(channel: str):
         try:
             html = get_html(url)
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
-            print(f"WARNING: @{channel} page {page + 1} failed: {exc}", file=sys.stderr)
+            print(f"WARNING: @{channel} page {page + 1} request failed: {exc}", file=sys.stderr)
             break
 
+        # Telegram occasionally changes its preview markup. Always scan the full
+        # response for direct config links, even when message wrapper classes differ.
+        page_links = extract_links(html)
+        found.update(page_links)
         chunks = re.split(r"tgme_widget_message_wrap", html)[1:]
+
         if not chunks:
+            title_match = re.search(r"<title[^>]*>(.*?)</title>", html, re.I | re.S)
+            title = clean_html(title_match.group(1)).strip()[:100] if title_match else "(no title)"
             print(
-                f"WARNING: no public preview posts found for @{channel}; "
-                "the channel may be private, unavailable, or blocked from GitHub Actions.",
+                f"WARNING: @{channel} page {page + 1}: Telegram message wrappers not found; "
+                f"response length={len(html)}, title={title!r}, "
+                f"config-like links in whole response={len(page_links)}.",
                 file=sys.stderr,
             )
+            # We scanned this response, but without post IDs cannot safely paginate.
             break
 
         oldest_ts = None
         oldest_id = None
         for chunk in chunks:
             tm = re.search(r'<time[^>]*datetime="([^"]+)"', chunk)
-            if not tm:
-                continue
-            try:
-                ts = int(datetime.fromisoformat(tm.group(1).replace("Z", "+00:00")).timestamp())
-            except ValueError:
-                continue
+            if tm:
+                try:
+                    ts = int(datetime.fromisoformat(tm.group(1).replace("Z", "+00:00")).timestamp())
+                except ValueError:
+                    ts = None
+                id_match = re.search(r'data-post="[^"/]+/(\d+)"', chunk)
+                post_id = int(id_match.group(1)) if id_match else None
+                if ts is not None and (oldest_ts is None or ts < oldest_ts):
+                    oldest_ts, oldest_id = ts, post_id
 
-            id_match = re.search(r'data-post="[^"/]+/(\d+)"', chunk)
-            post_id = int(id_match.group(1)) if id_match else None
-            if oldest_ts is None or ts < oldest_ts:
-                oldest_ts, oldest_id = ts, post_id
-
-            # Don't filter by age: the first run must also collect configs posted
-            # more than eight hours ago. Existing configs are deduplicated below.
-            for link in LINK_RE.findall(clean_html(chunk)):
-                found.add(link.rstrip(".,;)}]"))
+            found.update(extract_links(chunk))
 
         if oldest_ts is None or not oldest_id or oldest_id == before:
             break
@@ -125,8 +136,10 @@ def main():
     print(f"Total unique configs: {len(ordered)}; added this run: {len(ordered) - before_count}")
     if not ordered:
         print(
-            "WARNING: configs.json is still empty. Check the Actions log above; "
-            "this collector reads only links visible in public t.me/s previews."
+            "WARNING: configs.json is still empty. The log now includes response diagnostics; "
+            "if Telegram returns a block/error page, use an authenticated Telegram API/session "
+            "rather than relying on public preview HTML.",
+            file=sys.stderr,
         )
 
 
