@@ -1,3 +1,5 @@
 # One Telegram channel per line. Numeric IDs are supported (recommended format: -100xxxxxxxxxx).
 # The account configured in TG_SESSION must have access to each channel.
 # You can also use a public @username.
+
+mmdkavirtester
