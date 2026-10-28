@@ -84,6 +84,26 @@ jobs:
           chmod +x gradlew
           ./gradlew :app:assemblePlaystoreDebug --no-daemon --stacktrace
 
+      - name: Re-sign APKs with stable release key (when configured)
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          KEYSTORE="$RUNNER_TEMP/heheconfig-release.jks"
+          echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE"
+          find upstream/V2rayNG/app/build/outputs/apk -type f -name '*.apk' -print0 | while IFS= read -r -d '' APK; do
+            "$ANDROID_HOME/build-tools/37.0.0/zipalign" -f -p 4 "$APK" "$RUNNER_TEMP/aligned.apk"
+            "$ANDROID_HOME/build-tools/37.0.0/apksigner" sign --ks "$KEYSTORE" --ks-pass "pass:$ANDROID_KEYSTORE_PASSWORD" --ks-key-alias "$ANDROID_KEY_ALIAS" --key-pass "pass:$ANDROID_KEY_PASSWORD" --out "$APK.signed" "$RUNNER_TEMP/aligned.apk"
+            mv "$APK.signed" "$APK"
+            "$ANDROID_HOME/build-tools/37.0.0/apksigner" verify "$APK"
+          done
+          rm -f "$KEYSTORE" "$RUNNER_TEMP/aligned.apk"
+
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
