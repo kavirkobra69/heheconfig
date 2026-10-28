@@ -534,27 +534,40 @@ class TelegramSettingsActivity : AppCompatActivity() {
             say(t("update_checking"))
             try {
                 val result = withContext(Dispatchers.IO) {
-                    val c = (URL("https://api.github.com/repos/kavirkobra69/heheconfig/releases/latest").openConnection() as HttpURLConnection).apply {
+                    val c = (URL("https://api.github.com/repos/kavirkobra69/heheconfig/releases?per_page=10&t=" + System.currentTimeMillis()).openConnection() as HttpURLConnection).apply {
                         connectTimeout = 15000
                         readTimeout = 30000
                         setRequestProperty("Accept", "application/vnd.github+json")
                         setRequestProperty("User-Agent", "HeheConfig-Android-Updater")
-                        setRequestProperty("Cache-Control", "no-cache")
+                        setRequestProperty("Cache-Control", "no-cache, no-store")
+                        setRequestProperty("Pragma", "no-cache")
                     }
-                    val release = try {
+                    val releases = try {
                         if (c.responseCode !in 200..299) throw Exception("GitHub HTTP ${c.responseCode}")
-                        JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+                        JSONArray(c.inputStream.bufferedReader().use { it.readText() })
                     } finally { c.disconnect() }
 
-                    if (release.optBoolean("draft", false) || release.optBoolean("prerelease", false))
-                        throw Exception("آخرین Release نسخه پایدار نیست.")
-                    val latestVersion = release.optString("tag_name", "").removePrefix("v").trim()
-                    if (latestVersion.isBlank()) throw Exception("Release تگ نسخه ندارد.")
                     val currentVersion = packageManager.getPackageInfo(packageName, 0).versionName ?: "0.0.0"
-                    val comparison = compareVersions(latestVersion, currentVersion)
-                    if (comparison <= 0) return@withContext Triple<File?, String, String>(null, currentVersion, latestVersion)
-
-                    val assets = release.optJSONArray("assets") ?: JSONArray()
+                    var latestVersion = ""
+                    var assets = JSONArray()
+                    var foundRelease = false
+                    for (i in 0 until releases.length()) {
+                        val candidate = releases.optJSONObject(i) ?: continue
+                        if (candidate.optBoolean("draft", false) || candidate.optBoolean("prerelease", false)) continue
+                        val tag = candidate.optString("tag_name", "").removePrefix("v").trim()
+                        val candidateAssets = candidate.optJSONArray("assets") ?: JSONArray()
+                        val hasApk = (0 until candidateAssets.length()).any { n ->
+                            candidateAssets.optJSONObject(n)?.optString("name")?.endsWith(".apk", true) == true
+                        }
+                        if (tag.isNotBlank() && hasApk && (!foundRelease || compareVersions(tag, latestVersion) > 0)) {
+                            latestVersion = tag
+                            assets = candidateAssets
+                            foundRelease = true
+                        }
+                    }
+                    if (!foundRelease) throw Exception("هیچ Release پایدار دارای APK پیدا نشد.")
+                    if (compareVersions(latestVersion, currentVersion) <= 0)
+                        return@withContext Triple<File?, String, String>(null, currentVersion, latestVersion)
                     val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "universal"
                     val candidates = (0 until assets.length()).mapNotNull { i ->
                         assets.optJSONObject(i)?.let { it.optString("name") to it.optString("browser_download_url") }
@@ -568,8 +581,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
                     }
                     val chosen = preferred.firstNotNullOfOrNull { suffix ->
                         candidates.firstOrNull { it.first.contains(suffix, true) }
-                    } ?: candidates.firstOrNull()
-                        ?: throw Exception("در Release نسخه جدید هیچ APK وجود ندارد.")
+                    } ?: throw Exception("برای معماری این گوشی APK مناسب در Release پیدا نشد.")
                     val assetName = chosen.first
                     val downloadUrl = chosen.second
                     val outDir = File(cacheDir, "updates").apply { mkdirs() }
@@ -586,6 +598,9 @@ class TelegramSettingsActivity : AppCompatActivity() {
                         d.inputStream.use { input -> out.outputStream().use { output -> input.copyTo(output) } }
                         if (!out.isFile || out.length() < 1_000_000L)
                             throw Exception("APK ناقص یا دانلود خراب است؛ دوباره تلاش کن.")
+                        val header = out.inputStream().use { input -> ByteArray(2).also { if (input.read(it) != 2) throw Exception("فایل دانلودشده ناقص است.") } }
+                        if (header[0] != 0x50.toByte() || header[1] != 0x4b.toByte())
+                            throw Exception("فایل دانلودشده APK/ZIP معتبر نیست؛ لینک Release را بررسی کن.")
                     } finally { d.disconnect() }
                     Triple(out, currentVersion, latestVersion)
                 }
@@ -826,13 +841,8 @@ class TelegramSettingsActivity : AppCompatActivity() {
                     is RealPingEvent.Progress -> runOnUiThread { say(tf("test_progress", successful.size, targets.size)) }
                     is RealPingEvent.Finish -> runOnUiThread {
                         val failed = targets.filterNot { successful.contains(it) }
-                        if (failed.isEmpty()) { say(tf("test_finished", successful.size, 0)); return@runOnUiThread }
-                        AlertDialog.Builder(this)
-                            .setTitle(t("github_cleanup_title"))
-                            .setMessage(tf("github_cleanup_confirm", successful.size, failed.size))
-                            .setNegativeButton(t("cancel")) { _, _ -> say(t("cleanup_cancelled")) }
-                            .setPositiveButton(t("github_cleanup_yes")) { _, _ -> publishWorkingConfigsToGitHub(failed) }
-                            .show()
+                        if (failed.isEmpty()) say(tf("test_finished", successful.size, 0))
+                        else cleanupFailedConfigs(failed)
                     }
                 }
             }.start()
@@ -1061,30 +1071,47 @@ class TelegramSettingsActivity : AppCompatActivity() {
         }
     }
 
-    private fun publishWorkingConfigsToGitHub(failedGuids: List<String>) {
-        val failedUris = failedGuids.mapNotNull { githubConfigByGuid[it] }.toSet()
-        if (failedUris.isEmpty()) { say(t("no_github_configs_to_remove")); return }
+    private fun cleanupFailedConfigs(failedGuids: List<String>) {
+        val failed = failedGuids.distinct()
+        val failedUris = failed.mapNotNull { githubConfigByGuid[it] }.toSet()
         lifecycleScope.launch {
-            try {
-                val remaining = withContext(Dispatchers.IO) {
-                    val (old, sha) = githubReadText("configs.json")
-                    val array = JSONArray(old)
-                    val kept = JSONArray()
-                    var removed = 0
-                    for (i in 0 until array.length()) {
-                        val value = array.optString(i).trim()
-                        if (value in failedUris) removed++ else kept.put(value)
+            var remoteRemoved = 0
+            var remoteError: String? = null
+            if (githubTokenValue().isNotBlank() && failedUris.isNotEmpty()) {
+                try {
+                    remoteRemoved = withContext(Dispatchers.IO) {
+                        val (old, sha) = githubReadText("configs.json")
+                        val values = try {
+                            val arr = JSONArray(old)
+                            (0 until arr.length()).map { arr.optString(it).trim() }
+                        } catch (_: Exception) {
+                            val obj = JSONObject(old)
+                            val arr = obj.optJSONArray("configs") ?: obj.optJSONArray("proxies")
+                                ?: obj.optJSONArray("data") ?: throw Exception("configs.json ساختار شناخته‌شده‌ای ندارد")
+                            (0 until arr.length()).map { arr.optString(it).trim() }
+                        }
+                        val kept = JSONArray()
+                        var removed = 0
+                        values.forEach { value -> if (value in failedUris) removed++ else kept.put(value) }
+                        if (removed > 0) githubWriteText("configs.json", kept.toString(2) + "\n", sha, "Remove failed configs after mobile ping test")
+                        removed
                     }
-                    if (removed > 0) githubWriteText("configs.json", kept.toString(2) + "\n", sha, "Remove failed configs after mobile ping test")
-                    removed
-                }
-                failedGuids.forEach { MmkvManager.removeServer(it) }
-                githubImportedGuids.removeAll(failedGuids.toSet())
-                failedGuids.forEach { githubConfigByGuid.remove(it) }
-                prefs.edit().putString("github_imported_guids", githubImportedGuids.joinToString("\n"))
-                    .putString("github_config_by_guid", JSONObject(githubConfigByGuid as Map<*, *>).toString()).apply()
-                say(tf("github_cleanup_done", failedGuids.size, remaining))
-            } catch (e: Exception) { say(tf("error", e.message ?: "github_cleanup_failed")) }
+                } catch (e: Exception) { remoteError = e.message ?: "GitHub sync failed" }
+            }
+            failed.forEach { MmkvManager.removeServer(it) }
+            githubImportedGuids.removeAll(failed.toSet())
+            failed.forEach { githubConfigByGuid.remove(it) }
+            prefs.edit()
+                .putString("github_imported_guids", githubImportedGuids.joinToString("\n"))
+                .putString("github_config_by_guid", JSONObject(githubConfigByGuid as Map<*, *>).toString())
+                .apply()
+            say(if (remoteError != null) {
+                "کانفیگ‌های ناموفق از گوشی حذف شدند؛ همگام‌سازی GitHub ناموفق بود: " + remoteError
+            } else if (githubTokenValue().isBlank() || failedUris.isEmpty()) {
+                "تست تمام شد؛ " + failed.size + " کانفیگ ناموفق از گوشی حذف شد. برای حذف از GitHub توکن و نگاشت کانفیگ لازم است."
+            } else {
+                "تست تمام شد؛ " + failed.size + " کانفیگ ناموفق از گوشی و " + remoteRemoved + " کانفیگ از configs.json حذف شد."
+            })
         }
     }
 
