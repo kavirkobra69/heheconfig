@@ -86,7 +86,7 @@ if "com.github.fazilus:tdlib-android" not in gradle.read_text(encoding="utf-8"):
 activity_text = (dest / "TelegramSettingsActivity.kt").read_text(encoding="utf-8")
 manager_text = (dest / "TelegramManager.kt").read_text(encoding="utf-8")
 backup_text = (dest / "SessionBackup.kt").read_text(encoding="utf-8")
-for marker in ("startBackupExport()", "startBackupImport()", "RC_EXPORT", "RC_IMPORT", "SessionBackup.export", "SessionBackup.extract"):
+for marker in ("startBackupExport()", "startBackupImport()", "RC_EXPORT", "RC_IMPORT", "SessionBackup.export", "SessionBackup.extract", "importFromGitHub()", "testGitHubConfigs", "Test real delays", "RealPingWorkerService"):
     if marker not in activity_text:
         raise SystemExit(f"Missing backup UI/flow marker: {marker}")
 if "suspend fun closeClient()" not in manager_text:
