@@ -756,17 +756,32 @@ class TelegramSettingsActivity : AppCompatActivity() {
             say(t("github_loading"))
             try {
                 val configs = withContext(Dispatchers.IO) {
-                    val connection = (URL(source).openConnection() as HttpURLConnection).apply {
+                    val fetchUrl = source + (if (source.contains("?")) "&" else "?") + "t=" + System.currentTimeMillis()
+                    val connection = (URL(fetchUrl).openConnection() as HttpURLConnection).apply {
                         requestMethod = "GET"; connectTimeout = 15000; readTimeout = 30000
                         setRequestProperty("User-Agent", "heheconfig-android")
                         setRequestProperty("Accept", "application/json")
+                        setRequestProperty("Cache-Control", "no-cache")
+                        setRequestProperty("Pragma", "no-cache")
                     }
                     try {
                         if (connection.responseCode !in 200..299) throw Exception("HTTP ${connection.responseCode}")
-                        val array = JSONArray(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+                        val body = connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }.trim()
+                        val values = try {
+                            val array = JSONArray(body)
+                            (0 until array.length()).map { array.optString(it) }
+                        } catch (_: Exception) {
+                            val obj = JSONObject(body)
+                            val array = obj.optJSONArray("configs") ?: obj.optJSONArray("proxies")
+                                ?: obj.optJSONArray("data") ?: throw Exception("JSON has no config array")
+                            (0 until array.length()).map { array.optString(it) }
+                        }
                         val found = LinkedHashSet<String>()
                         val pattern = Regex("""(?i)^(vmess|vless|trojan|ss|hysteria2|hy2|tuic)://\S+$""")
-                        for (i in 0 until array.length()) { val value = array.optString(i).trim(); if (pattern.matches(value)) found.add(value) }
+                        for (raw in values) {
+                            val value = raw.trim()
+                            if (pattern.matches(value)) found.add(value)
+                        }
                         found.toList()
                     } finally { connection.disconnect() }
                 }
