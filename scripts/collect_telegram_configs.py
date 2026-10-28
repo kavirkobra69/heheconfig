@@ -13,14 +13,14 @@ from html import unescape
 ROOT = Path(__file__).resolve().parent.parent
 CHANNELS_FILE = ROOT / "telegram_channels.txt"
 OUTPUT_FILE = ROOT / "configs.json"
-LINK_RE = re.compile(r"(?:vmess|vless|trojan|ss|hysteria2|hy2|tuic)://[^\\s<>\\\"'\\x60]+", re.I)
+LINK_RE = re.compile(r"(?:vmess|vless|trojan|ss|hysteria2|hy2|tuic)://[^\s<>\"'\x60]+", re.I)
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 # Scan several pages on every run so the first run can import older posts too.
 MAX_PAGES_PER_CHANNEL = 12
 
 
 def clean_html(value: str) -> str:
-    value = re.sub(r"<br\\s*/?>", "\\n", value, flags=re.I)
+    value = re.sub(r"<br\s*/?>", "\n", value, flags=re.I)
     value = re.sub(r"<[^>]+>", " ", value)
     return unescape(value)
 
@@ -42,7 +42,7 @@ def read_channels():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        line = re.sub(r"^https?://t\\.me/", "", line).strip().strip("/")
+        line = re.sub(r"^https?://t\.me/", "", line).strip().strip("/")
         line = line.removeprefix("@")
         if re.fullmatch(r"[A-Za-z0-9_]{4,64}", line):
             channels.append(line)
@@ -82,7 +82,7 @@ def collect_channel(channel: str):
             except ValueError:
                 continue
 
-            id_match = re.search(r'data-post="[^"/]+/(\\d+)"', chunk)
+            id_match = re.search(r'data-post="[^"/]+/(\d+)"', chunk)
             post_id = int(id_match.group(1)) if id_match else None
             if oldest_ts is None or ts < oldest_ts:
                 oldest_ts, oldest_id = ts, post_id
@@ -121,7 +121,7 @@ def main():
         time.sleep(1)
 
     ordered = sorted(configs)
-    OUTPUT_FILE.write_text(json.dumps(ordered, ensure_ascii=False, indent=2) + "\\n", encoding="utf-8")
+    OUTPUT_FILE.write_text(json.dumps(ordered, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Total unique configs: {len(ordered)}; added this run: {len(ordered) - before_count}")
     if not ordered:
         print(
