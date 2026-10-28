@@ -1,0 +1,4 @@
+# Add one PUBLIC Telegram channel username per line, without https://t.me/
+# Lines beginning with # are ignored.
+# Example:
+# example_channel
