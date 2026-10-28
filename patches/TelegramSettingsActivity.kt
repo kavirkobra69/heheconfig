@@ -273,12 +273,23 @@ class TelegramSettingsActivity : AppCompatActivity() {
         if (channels.isEmpty()) channelList.addView(label(t("no_channels")))
         channels.toList().forEach { ch ->
             val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+            row.gravity = android.view.Gravity.CENTER_VERTICAL
             row.addView(TextView(this).apply {
-                text = "@$ch"; textSize = 16f
+                text = if (ch.toLongOrNull() != null) "Channel ID: $ch" else "@$ch"
+                textSize = 14f
+                setTextColor(Color.rgb(232, 224, 255))
+                setPadding(dp(8), dp(5), dp(8), dp(5))
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
             row.addView(btn { channels.remove(ch); savePrefs(); refreshChannels(); if (mode == "github") syncChannelsToGitHub(ch) }
-                .apply { text = t("remove") })
+                .apply {
+                    text = t("remove")
+                    layoutParams = LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, dp(40)).apply {
+                        topMargin = 0; bottomMargin = 0; marginStart = dp(4)
+                    }
+                    setPadding(dp(10), 0, dp(10), 0)
+                    minimumHeight = dp(40)
+                })
             channelList.addView(row)
         }
     }
@@ -644,83 +655,97 @@ class TelegramSettingsActivity : AppCompatActivity() {
         selected to branch
     }
 
+    /**
+     * Runs the repository's Update Telegram configs workflow on GitHub Actions.
+     * No Telegram session is opened on the phone; the workflow's TG_* secrets are used.
+     */
     private fun importTelegramConfigsToGitHubJson() {
         savePrefs()
-        val token = githubTokenValue()
-        if (token.isBlank()) { say("اول در بخش Admin توکن GitHub را ذخیره کن."); return }
+        if (githubTokenValue().isBlank()) { say("اول در بخش Admin توکن GitHub را ذخیره کن."); return }
         if (channels.isEmpty()) { say(t("add_first")); return }
-        val api = prefs.getString("api_id", "")?.toIntOrNull()
-        val hash = prefs.getString("api_hash", "") ?: ""
-        if (api == null || hash.isBlank()) {
-            say("اول وارد TelAccount شو، API ID و API Hash را وارد کن و حساب تلگرام را وصل کن.")
-            return
-        }
-        if (TelegramManager.state.value != "ready") {
-            TelegramManager.start(this, api, hash)
-        }
+        val repo = selectedRepository()
         lifecycleScope.launch {
             try {
-                val authState = withContext(Dispatchers.IO) {
-                    kotlinx.coroutines.withTimeout(30000) {
-                        TelegramManager.state.first { it == "ready" || it == "phone" || it == "code" || it == "password" || it == "other" }
-                    }
-                }
-                if (authState != "ready") {
-                    say("حساب تلگرام هنوز وارد نشده؛ از بخش TelAccount ورود را کامل کن و دوباره امتحان کن.")
-                    return@launch
-                }
-                val all = LinkedHashSet<String>()
-                val since = TelegramManager.sinceFor(range)
-                log.clear()
-                for (channel in channels.toList()) {
-                    say(log.toString() + "در حال خواندن @$channel ...")
-                    try {
-                        val result = TelegramManager.fetchToday(channel, since.toInt())
-                        all.addAll(result.configs)
-                        log.append("@").append(channel).append(": ").append(result.configs.size).append(" کانفیگ\n")
-                    } catch (e: Exception) {
-                        log.append("@").append(channel).append(": خطا: ").append(e.message ?: "unknown").append("\n")
-                    }
-                    say(log.toString())
-                }
-                if (all.isEmpty()) {
-                    say(log.toString() + "\nهیچ کانفیگی در بازه انتخاب‌شده پیدا نشد؛ فایل GitHub تغییر نکرد.")
-                    return@launch
-                }
-                val saved = withContext(Dispatchers.IO) {
-                    val (path, branch) = resolveConfigPathForRepo(selectedRepository())
-                    val oldAndSha = try {
-                        val current = githubRequest(path, "GET")
-                        val content = String(Base64.decode(current.optString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT), Charsets.UTF_8)
-                        val sha = current.optString("sha").takeIf { it.isNotBlank() }
-                        content to sha
-                    } catch (e: Exception) {
+                say("در حال ارسال فهرست کانال‌ها و اجرای GitHub Actions…")
+                val outcome = withContext(Dispatchers.IO) {
+                    val (old, sha) = try { githubReadText("telegram_channels.txt") } catch (e: Exception) {
                         if (e.message?.contains("HTTP 404") == true) "" to null else throw e
                     }
-                    val previous = try { JSONArray(oldAndSha.first) } catch (_: Exception) { JSONArray() }
-                    val merged = LinkedHashSet<String>()
-                    for (i in 0 until previous.length()) {
-                        val value = previous.optString(i).trim()
-                        if (value.isNotBlank()) merged.add(value)
+                    val comments = old.lines().filter { it.trim().startsWith("#") || it.isBlank() }
+                    val mergedChannels = (comments + channels.map { it.trim() }.filter { it.isNotBlank() })
+                        .distinctBy { it.removePrefix("@").lowercase() }
+                    val channelText = mergedChannels.joinToString("\n").trimEnd() + "\n"
+                    if (old != channelText) githubWriteText("telegram_channels.txt", channelText, sha, "Update Telegram channels from Android")
+                    val startedAt = System.currentTimeMillis() / 1000L
+                    dispatchTelegramWorkflow()
+                    var runId: Long? = null
+                    var completed = false
+                    var conclusion = ""
+                    repeat(90) {
+                        val runs = JSONObject(githubApi("https://api.github.com/repos/" + repo + "/actions/workflows/update-configs.yml/runs?event=workflow_dispatch&per_page=10"))
+                            .optJSONArray("workflow_runs") ?: JSONArray()
+                        for (i in 0 until runs.length()) {
+                            val run = runs.optJSONObject(i) ?: continue
+                            val createdEpoch = try { java.time.Instant.parse(run.optString("created_at")).epochSecond } catch (_: Exception) { 0L }
+                            if (createdEpoch >= startedAt - 5) {
+                                runId = run.optLong("id").takeIf { it > 0 }
+                                if (run.optString("status") == "completed") {
+                                    completed = true
+                                    conclusion = run.optString("conclusion")
+                                }
+                                break
+                            }
+                        }
+                        if (completed) return@withContext Triple(true, conclusion, runId)
+                        Thread.sleep(4000)
                     }
-                    merged.addAll(all)
-                    val json = JSONArray()
-                    merged.forEach { json.put(it) }
-                    githubWriteText(path, json.toString(2) + "\n", oldAndSha.second, "Import Telegram configs from Android")
-                    prefs.edit()
-                        .putString("admin_config_path", path)
-                        .putString("github_json_url", "https://raw.githubusercontent.com/" + selectedRepository() + "/" + branch + "/" + path)
-                        .apply()
-                    Triple(path, merged.size, all.size)
+                    Triple(false, "timeout", runId)
                 }
-                adminConfigPath.setText(saved.first)
-                val savedUrl = prefs.getString("github_json_url", null).orEmpty()
-                githubJsonUrl.setText(savedUrl.ifBlank { "https://raw.githubusercontent.com/${selectedRepository()}/main/${saved.first}" })
-                say(log.toString() + "\nانجام شد ✅ تعداد " + saved.third + " کانفیگ از تلگرام دریافت شد و در " + saved.first + " ذخیره شد. تعداد کل فایل: " + saved.second)
+                if (!outcome.first) {
+                    say("GitHub Actions اجرا شد، اما هنوز تمام نشده. چند دقیقه دیگر دوباره بزن؛ وضعیت اجرا را هم می‌توانی در Actions ببینی.")
+                    return@launch
+                }
+                if (outcome.second != "success") {
+                    say("اجرای Update Telegram configs ناموفق بود (" + outcome.second + "). لاگ Actions را بررسی کن؛ معمولاً TG_API_ID / TG_API_HASH / TG_SESSION یا دسترسی کانال مشکل دارد.")
+                    return@launch
+                }
+                val rawUrl = "https://raw.githubusercontent.com/" + repo + "/main/configs.json"
+                githubJsonUrl.setText(rawUrl)
+                prefs.edit().putString("github_json_url", rawUrl).apply()
+                say("کانفیگ‌ها در GitHub به‌روزرسانی شدند؛ در حال دریافت از configs.json…")
+                importFromGitHub()
             } catch (e: Exception) {
-                say("ذخیره کانفیگ‌ها در GitHub ناموفق بود: " + (e.message ?: "unknown error"))
+                say("اجرای GitHub Actions یا دریافت کانفیگ‌ها ناموفق بود: " + (e.message ?: "unknown") +
+                    "\nمطمئن شو توکن GitHub دسترسی Contents: Read/Write و Actions: Write دارد.")
             }
         }
+    }
+
+    private fun dispatchTelegramWorkflow() {
+        val token = githubTokenValue()
+        val repo = selectedRepository()
+        val url = URL("https://api.github.com/repos/" + repo + "/actions/workflows/update-configs.yml/dispatches")
+        val connection = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 15000
+            readTimeout = 30000
+            doOutput = true
+            setRequestProperty("Authorization", "Bearer " + token)
+            setRequestProperty("Accept", "application/vnd.github+json")
+            setRequestProperty("X-GitHub-Api-Version", "2022-11-28")
+            setRequestProperty("User-Agent", "heheconfig-android")
+            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+        }
+        try {
+            connection.outputStream.use {
+                it.write(JSONObject().put("ref", "main").toString().toByteArray(Charsets.UTF_8))
+            }
+            val code = connection.responseCode
+            if (code !in 200..299) {
+                val body = connection.errorStream?.bufferedReader(Charsets.UTF_8)?.use { it.readText() } ?: ""
+                throw Exception("GitHub Actions dispatch HTTP $code: $body")
+            }
+        } finally { connection.disconnect() }
     }
 
     private fun importFromGitHub() {
@@ -740,7 +765,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
                         if (connection.responseCode !in 200..299) throw Exception("HTTP ${connection.responseCode}")
                         val array = JSONArray(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
                         val found = LinkedHashSet<String>()
-                        val pattern = Regex("""(?i)^(vmess|vless|trojan|ss|hysteria2|hy2|tuic)://\\S+$""")
+                        val pattern = Regex("""(?i)^(vmess|vless|trojan|ss|hysteria2|hy2|tuic)://\S+$""")
                         for (i in 0 until array.length()) { val value = array.optString(i).trim(); if (pattern.matches(value)) found.add(value) }
                         found.toList()
                     } finally { connection.disconnect() }
