@@ -43,6 +43,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private var lang = "fa"
     private var mode: String? = null // null = home, "github" = GitHub only, "telegram" = Telegram account
     private var range = 0
+    private var updateInProgress = false
     private val log = StringBuilder()
     private val githubImportedGuids = mutableListOf<String>()
     private val githubConfigByGuid = linkedMapOf<String, String>()
@@ -77,15 +78,24 @@ class TelegramSettingsActivity : AppCompatActivity() {
         setOnClickListener { onClick() }
         isAllCaps = false
         textSize = 14f
+        typeface = Typeface.create("sans-serif-medium", Typeface.NORMAL)
         setTextColor(Color.WHITE)
-        background = rounded(Color.rgb(111, 66, 193), 14)
-        setPadding(dp(12), dp(8), dp(12), dp(8))
-        elevation = dp(2).toFloat()
+        background = GradientDrawable(
+            GradientDrawable.Orientation.LEFT_RIGHT,
+            intArrayOf(Color.rgb(124, 58, 237), Color.rgb(219, 39, 119))
+        ).apply { cornerRadius = dp(16).toFloat() }
+        setPadding(dp(16), dp(12), dp(16), dp(12))
+        elevation = dp(4).toFloat()
+        minimumHeight = dp(48)
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { topMargin = dp(5); bottomMargin = dp(5) }
     }
 
     private fun title(s: String) = TextView(this).apply {
-        text = s; textSize = 18f; setTextColor(Color.WHITE)
-        setTypeface(null, Typeface.BOLD); setPadding(0, dp(26), 0, dp(10))
+        text = s; textSize = 19f; setTextColor(Color.rgb(245, 238, 255))
+        setTypeface(Typeface.create("sans-serif-black", Typeface.BOLD)); setPadding(0, dp(24), 0, dp(10))
     }
 
     private fun label(s: String) = TextView(this).apply {
@@ -406,7 +416,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
                 intArrayOf(Color.rgb(18, 17, 29), Color.rgb(30, 20, 45), Color.rgb(18, 17, 29))
             )
         }
-        status = TextView(this).apply { setPadding(0, 24, 0, 24) }
+        status = TextView(this).apply { setPadding(dp(14), dp(14), dp(14), dp(14)); textSize = 14f; setTextColor(Color.rgb(232, 224, 255)); background = rounded(Color.rgb(35, 28, 52), 14) }
         channelList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         setContentView(ScrollView(this).apply { addView(root) })
 
@@ -506,39 +516,65 @@ class TelegramSettingsActivity : AppCompatActivity() {
     }
 
     private fun checkAndInstallUpdate() {
+        if (updateInProgress) { say("بررسی/آپدیت در حال اجراست…"); return }
+        updateInProgress = true
+        updateBtn.isEnabled = false
         lifecycleScope.launch {
             say(t("update_checking"))
             try {
                 val result = withContext(Dispatchers.IO) {
                     val c = (URL("https://api.github.com/repos/kavirkobra69/heheconfig/releases/latest").openConnection() as HttpURLConnection).apply {
-                        connectTimeout = 15000; readTimeout = 30000
+                        connectTimeout = 15000
+                        readTimeout = 30000
                         setRequestProperty("Accept", "application/vnd.github+json")
-                        setRequestProperty("User-Agent", "heheconfig-android-updater")
+                        setRequestProperty("User-Agent", "HeheConfig-Android-Updater")
+                        setRequestProperty("Cache-Control", "no-cache")
                     }
                     val release = try {
                         if (c.responseCode !in 200..299) throw Exception("GitHub HTTP ${c.responseCode}")
                         JSONObject(c.inputStream.bufferedReader().use { it.readText() })
                     } finally { c.disconnect() }
+
+                    if (release.optBoolean("draft", false) || release.optBoolean("prerelease", false))
+                        throw Exception("آخرین Release نسخه پایدار نیست.")
                     val latestVersion = release.optString("tag_name", "").removePrefix("v").trim()
-                    if (latestVersion.isBlank()) throw Exception("Latest Release has no version tag")
+                    if (latestVersion.isBlank()) throw Exception("Release تگ نسخه ندارد.")
                     val currentVersion = packageManager.getPackageInfo(packageName, 0).versionName ?: "0.0.0"
                     val comparison = compareVersions(latestVersion, currentVersion)
                     if (comparison <= 0) return@withContext Triple<File?, String, String>(null, currentVersion, latestVersion)
+
                     val assets = release.optJSONArray("assets") ?: JSONArray()
-                    var downloadUrl = ""
-                    var assetName = "heheconfig-update.apk"
-                    for (i in 0 until assets.length()) {
-                        val item = assets.getJSONObject(i)
-                        val name = item.optString("name")
-                        if (name.endsWith(".apk", true)) { downloadUrl = item.optString("browser_download_url"); assetName = name; break }
+                    val abi = Build.SUPPORTED_ABIS.firstOrNull() ?: "universal"
+                    val candidates = (0 until assets.length()).mapNotNull { i ->
+                        assets.optJSONObject(i)?.let { it.optString("name") to it.optString("browser_download_url") }
+                    }.filter { it.first.endsWith(".apk", true) && it.second.startsWith("https://") }
+                    val preferred = when {
+                        abi.contains("arm64", true) -> listOf("arm64-v8a", "universal")
+                        abi.contains("armeabi", true) -> listOf("armeabi-v7a", "universal")
+                        abi.contains("x86_64", true) -> listOf("x86_64", "universal")
+                        abi.contains("x86", true) -> listOf("x86", "universal")
+                        else -> listOf("universal")
                     }
-                    if (downloadUrl.isBlank()) throw Exception("Release v$latestVersion has no APK asset")
+                    val chosen = preferred.firstNotNullOfOrNull { suffix ->
+                        candidates.firstOrNull { it.first.contains(suffix, true) }
+                    } ?: candidates.firstOrNull()
+                        ?: throw Exception("در Release نسخه جدید هیچ APK وجود ندارد.")
+                    val assetName = chosen.first
+                    val downloadUrl = chosen.second
                     val outDir = File(cacheDir, "updates").apply { mkdirs() }
                     val out = File(outDir, assetName)
-                    val d = (URL(downloadUrl).openConnection() as HttpURLConnection).apply { connectTimeout = 15000; readTimeout = 60000 }
+                    if (out.exists()) out.delete()
+                    val d = (URL(downloadUrl).openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 20000
+                        readTimeout = 120000
+                        instanceFollowRedirects = true
+                        setRequestProperty("User-Agent", "HeheConfig-Android-Updater")
+                    }
                     try {
                         if (d.responseCode !in 200..299) throw Exception("APK download HTTP ${d.responseCode}")
                         d.inputStream.use { input -> out.outputStream().use { output -> input.copyTo(output) } }
+                        if (!out.isFile || out.length() < 1_000_000L)
+                            throw Exception("APK ناقص یا دانلود خراب است؛ دوباره تلاش کن.")
                     } finally { d.disconnect() }
                     Triple(out, currentVersion, latestVersion)
                 }
@@ -546,7 +582,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
                 if (apk == null) {
                     say(if (compareVersions(result.second, result.third) == 0)
                         "برنامه به‌روز است · نسخه ${result.second}"
-                    else "نسخه نصب‌شده (${result.second}) از آخرین نسخه انتشار (${result.third}) جدیدتر است.")
+                    else "نسخه نصب‌شده (${result.second}) از آخرین نسخه (${result.third}) جدیدتر است.")
                     return@launch
                 }
                 if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
@@ -555,13 +591,20 @@ class TelegramSettingsActivity : AppCompatActivity() {
                     return@launch
                 }
                 val uri = FileProvider.getUriForFile(this@TelegramSettingsActivity, "$packageName.fileprovider", apk)
-                val intent = Intent(Intent.ACTION_VIEW).apply {
-                    setDataAndType(uri, "application/vnd.android.package-archive")
-                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                val intent = Intent(Intent.ACTION_INSTALL_PACKAGE).apply {
+                    data = uri
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                    putExtra(Intent.EXTRA_NOT_UNKNOWN_SOURCE, true)
+                    putExtra(Intent.EXTRA_RETURN_RESULT, true)
                 }
-                say("در حال نصب نسخه ${result.third}…")
+                say("نسخه ${result.third} دانلود شد؛ نصب را در پنجره اندروید تأیید کن.")
                 startActivity(intent)
-            } catch (e: Exception) { say(tf("update_error", e.message ?: "unknown")) }
+            } catch (e: Exception) {
+                say("آپدیت ناموفق بود: ${e.message ?: "خطای نامشخص"}")
+            } finally {
+                updateInProgress = false
+                updateBtn.isEnabled = true
+            }
         }
     }
 
