@@ -2,5 +2,5 @@
 # Lines beginning with # are ignored.
 # Example:
 # example_channel
-@mmdkavirtester
+-1004473894125
 @Pruuxii
