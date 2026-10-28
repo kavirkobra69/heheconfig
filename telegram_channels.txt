@@ -2,4 +2,4 @@
 # Lines beginning with # are ignored.
 # Example:
 # example_channel
-example_Pruuxii
+@mmdkavirtester
