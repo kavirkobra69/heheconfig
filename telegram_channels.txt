@@ -2,4 +2,4 @@
 # Lines beginning with # are ignored.
 # Example:
 # example_channel
-Pruuxii
+example_Pruuxii
