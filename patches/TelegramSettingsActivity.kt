@@ -546,7 +546,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
 
     private fun githubReadText(path: String): Pair<String, String> {
         val json = githubRequest(path, "GET")
-        val content = String(Base64.decode(json.getString("content").replace("\\n", ""), Base64.DEFAULT), Charsets.UTF_8)
+        val content = String(Base64.decode(json.getString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT), Charsets.UTF_8)
         return content to json.getString("sha")
     }
 
