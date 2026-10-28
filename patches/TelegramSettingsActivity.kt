@@ -27,6 +27,10 @@ import kotlinx.coroutines.withContext
 import org.json.JSONArray
 import org.json.JSONObject
 import android.util.Base64
+import androidx.core.content.FileProvider
+import android.os.Build
+import android.provider.Settings
+import java.io.File
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.ConcurrentHashMap
@@ -36,6 +40,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private val prefs by lazy { getSharedPreferences("tg_import", Context.MODE_PRIVATE) }
     private val channels = mutableListOf<String>()
     private var lang = "fa"
+    private var mode: String? = null // null = home, "github" = GitHub only, "telegram" = Telegram account
     private var range = 0
     private val log = StringBuilder()
     private val githubImportedGuids = mutableListOf<String>()
@@ -102,6 +107,11 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private val newChannel by lazy { edit("") }
 
     // ---------- دکمه‌ها ----------
+    private val githubModeBtn by lazy { btn { mode = "github"; render() } }
+    private val telModeBtn by lazy { btn { mode = "telegram"; render() } }
+    private val homeBtn by lazy { btn { mode = null; render() } }
+    private val updateBtn by lazy { btn { checkAndInstallUpdate() } }
+
     private val langBtn by lazy {
         btn {
             lang = if (lang == "fa") "en" else "fa"
@@ -237,7 +247,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         newChannel.setText("")
         savePrefs()
         refreshChannels()
-        syncChannelsToGitHub()
+        if (mode == "github") syncChannelsToGitHub()
     }
 
     private fun refreshChannels() {
@@ -249,7 +259,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
                 text = "@$ch"; textSize = 16f
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
-            row.addView(btn { channels.remove(ch); savePrefs(); refreshChannels(); syncChannelsToGitHub(ch) }
+            row.addView(btn { channels.remove(ch); savePrefs(); refreshChannels(); if (mode == "github") syncChannelsToGitHub(ch) }
                 .apply { text = t("remove") })
             channelList.addView(row)
         }
@@ -289,21 +299,38 @@ class TelegramSettingsActivity : AppCompatActivity() {
                 !prefs.getString("api_hash", "").isNullOrEmpty()
 
         root.addView(langBtn)
+        updateBtn.text = t("check_update")
+        root.addView(updateBtn)
 
-        root.addView(title(t("tg_title")))
-        when {
-            st == "ready" -> {
-                root.addView(label(t("connected")))
-                root.addView(logoutBtn)
-            }
-            st == "init" && hasCreds -> root.addView(label(t("connecting")))
-            else -> listOf<View>(apiId, apiHash, phone, sendBtn, code, password, loginBtn)
-                .forEach { root.addView(it) }
+        if (mode == null) {
+            root.addView(title(t("home_title")))
+            root.addView(label(t("home_description")))
+            githubModeBtn.text = "GitHub"
+            telModeBtn.text = "TelAccount"
+            root.addView(githubModeBtn)
+            root.addView(telModeBtn)
+            root.addView(status)
+            return
         }
 
-        root.addView(title(t("worker_title")))
-        root.addView(workerUrl)
-        root.addView(saveWorkerBtn)
+        homeBtn.text = t("back_home")
+        root.addView(homeBtn)
+
+        if (mode == "telegram") {
+            root.addView(title(t("tg_title")))
+            when {
+                st == "ready" -> {
+                    root.addView(label(t("connected")))
+                    root.addView(logoutBtn)
+                }
+                st == "init" && hasCreds -> root.addView(label(t("connecting")))
+                else -> listOf<View>(apiId, apiHash, phone, sendBtn, code, password, loginBtn)
+                    .forEach { root.addView(it) }
+            }
+            root.addView(title(t("worker_title")))
+            root.addView(workerUrl)
+            root.addView(saveWorkerBtn)
+        }
 
         root.addView(title(t("channels_title")))
         root.addView(newChannel)
@@ -311,22 +338,23 @@ class TelegramSettingsActivity : AppCompatActivity() {
         root.addView(channelList)
         refreshChannels()
 
-        root.addView(title(t("github_title")))
-        root.addView(label(t("github_description")))
-        root.addView(githubJsonUrl)
-        root.addView(githubToken)
-        root.addView(githubImportBtn)
-        root.addView(testRealDelaysBtn)
-
-        root.addView(title(t("import_title")))
-        root.addView(rangeBtn)
-        root.addView(importBtn)
-
-        root.addView(title(t("backup_title")))
-        root.addView(label(t("backup_warning")))
-        root.addView(backupPassword)
-        root.addView(exportBackupBtn)
-        root.addView(importBackupBtn)
+        if (mode == "github") {
+            root.addView(title(t("github_title")))
+            root.addView(label(t("github_description")))
+            root.addView(githubJsonUrl)
+            root.addView(githubToken)
+            root.addView(githubImportBtn)
+            root.addView(testRealDelaysBtn)
+        } else {
+            root.addView(title(t("import_title")))
+            root.addView(rangeBtn)
+            root.addView(importBtn)
+            root.addView(title(t("backup_title")))
+            root.addView(label(t("backup_warning")))
+            root.addView(backupPassword)
+            root.addView(exportBackupBtn)
+            root.addView(importBackupBtn)
+        }
         root.addView(status)
     }
 
@@ -426,6 +454,52 @@ class TelegramSettingsActivity : AppCompatActivity() {
             } catch (e: Exception) {
                 say(tf("error", e.message ?: "backup_failed"))
             }
+        }
+    }
+
+    private fun checkAndInstallUpdate() {
+        lifecycleScope.launch {
+            say(t("update_checking"))
+            try {
+                val apk = withContext(Dispatchers.IO) {
+                    val c = (URL("https://api.github.com/repos/kavirkobra69/heheconfig/releases/latest").openConnection() as HttpURLConnection).apply {
+                        connectTimeout = 15000; readTimeout = 30000
+                        setRequestProperty("Accept", "application/vnd.github+json")
+                        setRequestProperty("User-Agent", "heheconfig-android-updater")
+                    }
+                    val release = try {
+                        if (c.responseCode !in 200..299) throw Exception("GitHub HTTP ${c.responseCode}")
+                        JSONObject(c.inputStream.bufferedReader().use { it.readText() })
+                    } finally { c.disconnect() }
+                    val assets = release.optJSONArray("assets") ?: JSONArray()
+                    var downloadUrl = ""
+                    var assetName = "heheconfig-update.apk"
+                    for (i in 0 until assets.length()) {
+                        val item = assets.getJSONObject(i)
+                        val name = item.optString("name")
+                        if (name.endsWith(".apk", true)) { downloadUrl = item.optString("browser_download_url"); assetName = name; break }
+                    }
+                    if (downloadUrl.isBlank()) throw Exception("No APK asset in latest release")
+                    val outDir = File(cacheDir, "updates").apply { mkdirs() }
+                    val out = File(outDir, assetName)
+                    val d = (URL(downloadUrl).openConnection() as HttpURLConnection).apply { connectTimeout = 15000; readTimeout = 60000 }
+                    try { if (d.responseCode !in 200..299) throw Exception("APK download HTTP ${d.responseCode}"); d.inputStream.use { input -> out.outputStream().use { output -> input.copyTo(output) } } }
+                    finally { d.disconnect() }
+                    out
+                }
+                if (Build.VERSION.SDK_INT >= 26 && !packageManager.canRequestPackageInstalls()) {
+                    say(t("update_unknown_sources"))
+                    startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:$packageName")))
+                    return@launch
+                }
+                val uri = FileProvider.getUriForFile(this@TelegramSettingsActivity, "$packageName.fileprovider", apk)
+                val intent = Intent(Intent.ACTION_VIEW).apply {
+                    setDataAndType(uri, "application/vnd.android.package-archive")
+                    addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_ACTIVITY_NEW_TASK)
+                }
+                say(t("update_install"))
+                startActivity(intent)
+            } catch (e: Exception) { say(tf("update_error", e.message ?: "unknown")) }
         }
     }
 
@@ -612,6 +686,16 @@ class TelegramSettingsActivity : AppCompatActivity() {
 
 private val STR: Map<String, Map<String, String>> = mapOf(
     "fa" to mapOf(
+        "home_title" to "روش دریافت کانفیگ را انتخاب کن",
+        "home_description" to "در GitHub کانفیگ‌ها از مخزن گرفته می‌شوند و نیازی به ورود تلگرام نیست. در TelAccount با حساب خودت وارد می‌شوی.",
+        "back_home" to "بازگشت به انتخاب روش",
+        "check_update" to "بررسی و نصب آپدیت برنامه",
+        "update_checking" to "در حال بررسی نسخه جدید...",
+        "update_none" to "نسخه جدیدی پیدا نشد یا APK در Release موجود نیست.",
+        "update_downloading" to "نسخه جدید پیدا شد؛ در حال دانلود...",
+        "update_install" to "دانلود تمام شد؛ نصب را از پنجره اندروید تأیید کن.",
+        "update_unknown_sources" to "برای نصب آپدیت، اجازه نصب برنامه از این منبع را فعال کن و دوباره بزن.",
+        "update_error" to "آپدیت ناموفق بود: %s",
         "tg_title" to "حساب تلگرام",
         "connected" to "وصل شده ✅",
         "connecting" to "در حال اتصال...",
@@ -691,6 +775,16 @@ private val STR: Map<String, Map<String, String>> = mapOf(
         "err_key" to "رمز (key) آدرس ورکر با رمز توی کد ورکر یکی نیست"
     ),
     "en" to mapOf(
+        "home_title" to "Choose how to get configs",
+        "home_description" to "GitHub mode imports from the repository without logging into Telegram. TelAccount mode uses your own Telegram account.",
+        "back_home" to "Back to method selection",
+        "check_update" to "Check for and install app update",
+        "update_checking" to "Checking for a new version...",
+        "update_none" to "No new release found or no APK asset is available.",
+        "update_downloading" to "A new version was found; downloading...",
+        "update_install" to "Download complete. Confirm installation in Android.",
+        "update_unknown_sources" to "Allow installs from this source, then tap update again.",
+        "update_error" to "Update failed: %s",
         "tg_title" to "Telegram account",
         "connected" to "Connected ✅",
         "connecting" to "Connecting...",
