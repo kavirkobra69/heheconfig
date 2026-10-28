@@ -249,7 +249,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
                 text = "@$ch"; textSize = 16f
                 layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
             })
-            row.addView(btn { channels.remove(ch); savePrefs(); refreshChannels(); syncChannelsToGitHub() }
+            row.addView(btn { channels.remove(ch); savePrefs(); refreshChannels(); syncChannelsToGitHub(ch) }
                 .apply { text = t("remove") })
             channelList.addView(row)
         }
@@ -557,7 +557,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         githubRequest(path, "PUT", body)
     }
 
-    private fun syncChannelsToGitHub() {
+    private fun syncChannelsToGitHub(removedChannel: String? = null) {
         if (githubTokenValue().isBlank()) { say(t("channels_saved_local")); return }
         val desired = channels.joinToString("\n", postfix = if (channels.isNotEmpty()) "\n" else "")
         lifecycleScope.launch {
@@ -565,7 +565,10 @@ class TelegramSettingsActivity : AppCompatActivity() {
                 val result = withContext(Dispatchers.IO) {
                     val (old, sha) = githubReadText("telegram_channels.txt")
                     val comments = old.lines().filter { it.trim().startsWith("#") || it.isBlank() }
-                    val merged = (comments + desired.lines().filter { it.isNotBlank() }).distinct().joinToString("\n").trimEnd() + "\n"
+                    val remoteChannels = old.lines().map { it.trim() }.filter { it.isNotBlank() && !it.startsWith("#") }
+                        .filterNot { removedChannel != null && it.removePrefix("@").equals(removedChannel.removePrefix("@"), true) }
+                    val mergedChannels = (remoteChannels + desired.lines().filter { it.isNotBlank() }).distinctBy { it.removePrefix("@").lowercase() }
+                    val merged = (comments + mergedChannels).distinct().joinToString("\n").trimEnd() + "\n"
                     if (old == merged) return@withContext "کانال‌ها از قبل همگام بودند"
                     githubWriteText("telegram_channels.txt", merged, sha, "Update Telegram channels from Android")
                     "کانال‌ها در GitHub همگام شدند ✅"
