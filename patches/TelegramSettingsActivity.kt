@@ -408,11 +408,13 @@ class TelegramSettingsActivity : AppCompatActivity() {
             root.addView(saveWorkerBtn)
         }
 
-        root.addView(title(t("channels_title")))
-        root.addView(newChannel)
-        root.addView(addBtn)
-        root.addView(channelList)
-        refreshChannels()
+        if (mode != "settings") {
+            root.addView(title(t("channels_title")))
+            root.addView(newChannel)
+            root.addView(addBtn)
+            root.addView(channelList)
+            refreshChannels()
+        }
 
         if (mode == "github") {
             root.addView(title(t("github_title")))
