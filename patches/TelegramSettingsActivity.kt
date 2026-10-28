@@ -108,7 +108,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
 
     // ---------- دکمه‌ها ----------
     private val githubModeBtn by lazy { btn { mode = "github"; render() } }
-    private val telModeBtn by lazy { btn { mode = "telegram"; render() } }
+    private val telModeBtn by lazy { btn { mode = "telegram"; val id = prefs.getString("api_id", "")?.toIntOrNull(); val hash = prefs.getString("api_hash", "") ?: ""; if (id != null && hash.isNotBlank()) TelegramManager.start(this, id, hash); render() } }
     private val homeBtn by lazy { btn { mode = null; render() } }
     private val updateBtn by lazy { btn { checkAndInstallUpdate() } }
 
@@ -379,11 +379,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         githubImportedGuids.addAll((prefs.getString("github_imported_guids", "") ?: "").lines().filter { it.isNotBlank() })
         try { val saved = JSONObject(prefs.getString("github_config_by_guid", "{}") ?: "{}"); saved.keys().forEach { k -> githubConfigByGuid[k] = saved.optString(k) } } catch (_: Exception) {}
 
-        // اگه قبلاً لاگین کردی خودکار وصل می‌شه
-        val id = prefs.getString("api_id", "")?.toIntOrNull()
-        val hash = prefs.getString("api_hash", "") ?: ""
-        if (id != null && hash.isNotEmpty()) TelegramManager.start(this, id, hash)
-
+        // Telegram authentication starts only after the user selects TelAccount.
         lifecycleScope.launch { TelegramManager.state.collect { render() } }
     }
 
