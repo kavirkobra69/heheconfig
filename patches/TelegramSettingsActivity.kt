@@ -11,6 +11,7 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -44,6 +45,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private var mode: String? = null // null = home, "github" = GitHub only, "telegram" = Telegram account
     private var range = 0
     private var updateInProgress = false
+    private var pingRunInProgress = false
     private val log = StringBuilder()
     private val githubImportedGuids = mutableListOf<String>()
     private val githubConfigByGuid = linkedMapOf<String, String>()
@@ -186,6 +188,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private val githubImportBtn by lazy { btn { importFromGitHub() } }
     private val publishTelegramConfigsBtn by lazy { btn { importTelegramConfigsToGitHubJson() } }
     private val testRealDelaysBtn by lazy { btn { confirmAndTestGitHubConfigs() } }
+    private val pingSettingsBtn by lazy { btn { showPingSettings() } }
 
     private val rangeBtn by lazy {
         btn { range = (range + 1) % 3; savePrefs(); render() }
@@ -403,6 +406,8 @@ class TelegramSettingsActivity : AppCompatActivity() {
             root.addView(publishTelegramConfigsBtn)
             root.addView(githubImportBtn)
             root.addView(testRealDelaysBtn)
+            pingSettingsBtn.text = if (lang == "fa") "تنظیمات تست پینگ" else "Ping test settings"
+            root.addView(pingSettingsBtn)
         } else {
             root.addView(title(t("import_title")))
             root.addView(rangeBtn)
@@ -818,12 +823,66 @@ class TelegramSettingsActivity : AppCompatActivity() {
         }
     }
 
+    private fun showPingSettings() {
+        val panel = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(8), dp(20), dp(4))
+        }
+        val maxPing = edit("").apply {
+            hint = if (lang == "fa") "حداکثر پینگ (میلی‌ثانیه)، مثلاً 200" else "Maximum ping in ms, e.g. 200"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(prefs.getInt("ping_max_ms", 200).toString())
+        }
+        val batchSize = edit("").apply {
+            hint = if (lang == "fa") "تعداد کانفیگ در هر دسته (1 تا 50)" else "Configs per batch (1 to 50)"
+            inputType = InputType.TYPE_CLASS_NUMBER
+            setText(prefs.getInt("ping_batch_size", 10).toString())
+        }
+        val removeBad = CheckBox(this).apply {
+            text = if (lang == "fa") "حذف خودکار کانفیگ‌های بالاتر از حد پینگ یا بدون پاسخ" else "Automatically remove over-limit or non-responding configs"
+            setTextColor(Color.WHITE)
+            isChecked = prefs.getBoolean("ping_auto_remove", true)
+        }
+        panel.addView(label(if (lang == "fa") "حداکثر پینگ مجاز" else "Maximum allowed ping"))
+        panel.addView(maxPing)
+        panel.addView(label(if (lang == "fa") "تعداد کانفیگ در هر دسته (برای کنترل سرعت)" else "Configs per batch (controls speed)"))
+        panel.addView(batchSize)
+        panel.addView(removeBad)
+        AlertDialog.Builder(this)
+            .setTitle(if (lang == "fa") "تنظیمات تست پینگ" else "Ping test settings")
+            .setView(panel)
+            .setNegativeButton(t("cancel"), null)
+            .setPositiveButton(if (lang == "fa") "ذخیره تنظیمات" else "Save settings") { _, _ ->
+                val limit = maxPing.text.toString().toIntOrNull()
+                val batch = batchSize.text.toString().toIntOrNull()
+                if (limit == null || limit !in 1..60000) {
+                    say(if (lang == "fa") "حد پینگ باید بین 1 تا 60000 میلی‌ثانیه باشد." else "Ping limit must be 1–60000 ms.")
+                    return@setPositiveButton
+                }
+                if (batch == null || batch !in 1..50) {
+                    say(if (lang == "fa") "اندازه دسته باید بین 1 تا 50 باشد." else "Batch size must be between 1 and 50.")
+                    return@setPositiveButton
+                }
+                prefs.edit().putInt("ping_max_ms", limit).putInt("ping_batch_size", batch)
+                    .putBoolean("ping_auto_remove", removeBad.isChecked).apply()
+                say(if (lang == "fa") "ذخیره شد: حد $limit ms، دسته $batch، حذف خودکار ${if (removeBad.isChecked) "روشن" else "خاموش"}." else "Saved: limit $limit ms, batch $batch, auto-remove ${if (removeBad.isChecked) "on" else "off"}.")
+            }
+            .show()
+    }
+
     private fun confirmAndTestGitHubConfigs() {
         val ids = githubImportedGuids.toList()
         if (ids.isEmpty()) { say(t("test_import_first")); return }
+        if (pingRunInProgress) { say(if (lang == "fa") "تست پینگ در حال اجراست." else "A ping test is already running."); return }
+        val limit = prefs.getInt("ping_max_ms", 200)
+        val batch = prefs.getInt("ping_batch_size", 10)
+        val remove = prefs.getBoolean("ping_auto_remove", true)
+        val message = if (lang == "fa")
+            "حد پینگ: $limit ms\nاندازه هر دسته: $batch\nحذف خودکار: ${if (remove) "روشن" else "خاموش"}\n\nکانفیگ‌های بالاتر از حد یا بدون پاسخ ناموفق محسوب می‌شوند."
+        else "Maximum ping: $limit ms\nBatch size: $batch\nAuto-remove: ${if (remove) "ON" else "OFF"}\n\nConfigs over the limit or without a response are considered failed."
         AlertDialog.Builder(this)
             .setTitle(t("test_real_delays"))
-            .setMessage(t("test_confirm_message"))
+            .setMessage(message)
             .setNegativeButton(t("cancel"), null)
             .setPositiveButton(t("test_start")) { _, _ -> testGitHubConfigs(ids) }
             .show()
@@ -832,21 +891,45 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private fun testGitHubConfigs(ids: List<String>) {
         val targets = ids.distinct().filter { MmkvManager.decodeServerConfig(it) != null }
         if (targets.isEmpty()) { say(t("test_import_first")); return }
+        pingRunInProgress = true
         val successful = ConcurrentHashMap.newKeySet<String>()
-        say(tf("test_started", targets.size))
-        try {
-            RealPingWorkerService(this, targets) { event ->
-                when (event) {
-                    is RealPingEvent.Result -> if (event.delayMillis >= 0L) successful.add(event.guid)
-                    is RealPingEvent.Progress -> runOnUiThread { say(tf("test_progress", successful.size, targets.size)) }
-                    is RealPingEvent.Finish -> runOnUiThread {
-                        val failed = targets.filterNot { successful.contains(it) }
-                        if (failed.isEmpty()) say(tf("test_finished", successful.size, 0))
-                        else cleanupFailedConfigs(failed)
+        val limit = prefs.getInt("ping_max_ms", 200)
+        val batchSize = prefs.getInt("ping_batch_size", 10).coerceIn(1, 50)
+        val autoRemove = prefs.getBoolean("ping_auto_remove", true)
+        say("شروع تست ${targets.size} کانفیگ؛ حد پینگ $limit ms، دسته $batchSize ...")
+        fun runBatch(offset: Int) {
+            if (offset >= targets.size) {
+                runOnUiThread {
+                    pingRunInProgress = false
+                    val failed = targets.filterNot { successful.contains(it) }
+                    if (autoRemove && failed.isNotEmpty()) {
+                        cleanupFailedConfigs(failed)
+                    } else {
+                        val suffix = if (autoRemove) "چیزی برای حذف نبود." else "حذف خودکار خاموش بود؛ کانفیگ‌ها حفظ شدند."
+                        say("تست تمام شد: ${successful.size} سالم، ${failed.size} ناموفق. $suffix")
                     }
                 }
-            }.start()
-        } catch (e: Exception) { say(tf("error", e.message ?: "test_failed")) }
+                return
+            }
+            val batch = targets.subList(offset, minOf(offset + batchSize, targets.size))
+            try {
+                RealPingWorkerService(this, batch) { event ->
+                    when (event) {
+                        is RealPingEvent.Result -> if (event.delayMillis >= 0L && event.delayMillis <= limit) successful.add(event.guid)
+                        is RealPingEvent.Progress -> runOnUiThread {
+                            say("تست ${minOf(offset + batch.size, targets.size)}/${targets.size}؛ سالم ${successful.size}، حد $limit ms")
+                        }
+                        is RealPingEvent.Finish -> runOnUiThread { runBatch(offset + batch.size) }
+                    }
+                }.start()
+            } catch (e: Exception) {
+                runOnUiThread {
+                    pingRunInProgress = false
+                    say("تست پینگ ناموفق شد: " + (e.message ?: "unknown error"))
+                }
+            }
+        }
+        runBatch(0)
     }
 
     private fun githubTokenValue(): String = (githubToken.text.toString().trim().ifEmpty { prefs.getString("github_token", "") ?: "" })
