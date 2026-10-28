@@ -575,6 +575,105 @@ class TelegramSettingsActivity : AppCompatActivity() {
 
     private fun say(s: String) { status.text = s }
 
+    private suspend fun resolveConfigPathForRepo(repo: String): Pair<String, String> = withContext(Dispatchers.IO) {
+        val metadata = JSONObject(githubApi("https://api.github.com/repos/" + repo))
+        val branch = metadata.optString("default_branch", "main")
+        val encodedBranch = java.net.URLEncoder.encode(branch, "UTF-8").replace("+", "%20")
+        val tree = JSONObject(githubApi("https://api.github.com/repos/" + repo + "/git/trees/" + encodedBranch + "?recursive=1"))
+            .optJSONArray("tree") ?: JSONArray()
+        val candidates = mutableListOf<String>()
+        for (i in 0 until tree.length()) {
+            val item = tree.optJSONObject(i) ?: continue
+            if (item.optString("type") != "blob") continue
+            val path = item.optString("path")
+            val name = path.substringAfterLast("/")
+            if (name.equals("configs.json", true) || name.equals("config.json", true)) candidates.add(path)
+        }
+        val selected = candidates.sortedWith(compareBy<String>(
+            { if (it == "configs.json") 0 else if (it == "config.json") 1 else 2 },
+            { it.count { ch -> ch == '/' } }, { it }
+        )).firstOrNull() ?: "config.json"
+        selected to branch
+    }
+
+    private fun importTelegramConfigsToGitHubJson() {
+        savePrefs()
+        val token = githubTokenValue()
+        if (token.isBlank()) { say("اول در بخش Admin توکن GitHub را ذخیره کن."); return }
+        if (channels.isEmpty()) { say(t("add_first")); return }
+        val api = prefs.getString("api_id", "")?.toIntOrNull()
+        val hash = prefs.getString("api_hash", "") ?: ""
+        if (api == null || hash.isBlank()) {
+            say("اول وارد TelAccount شو، API ID و API Hash را وارد کن و حساب تلگرام را وصل کن.")
+            return
+        }
+        if (TelegramManager.state.value != "ready") {
+            TelegramManager.start(this, api, hash)
+        }
+        lifecycleScope.launch {
+            try {
+                val authState = withContext(Dispatchers.IO) {
+                    kotlinx.coroutines.withTimeout(30000) {
+                        TelegramManager.state.first { it == "ready" || it == "phone" || it == "code" || it == "password" || it == "other" }
+                    }
+                }
+                if (authState != "ready") {
+                    say("حساب تلگرام هنوز وارد نشده؛ از بخش TelAccount ورود را کامل کن و دوباره امتحان کن.")
+                    return@launch
+                }
+                val all = LinkedHashSet<String>()
+                val since = TelegramManager.sinceFor(range)
+                log.clear()
+                for (channel in channels.toList()) {
+                    say(log.toString() + "در حال خواندن @$channel ...")
+                    try {
+                        val result = TelegramManager.fetchToday(channel, since.toInt())
+                        all.addAll(result.configs)
+                        log.append("@").append(channel).append(": ").append(result.configs.size).append(" کانفیگ\n")
+                    } catch (e: Exception) {
+                        log.append("@").append(channel).append(": خطا: ").append(e.message ?: "unknown").append("\n")
+                    }
+                    say(log.toString())
+                }
+                if (all.isEmpty()) {
+                    say(log.toString() + "\nهیچ کانفیگی در بازه انتخاب‌شده پیدا نشد؛ فایل GitHub تغییر نکرد.")
+                    return@launch
+                }
+                val saved = withContext(Dispatchers.IO) {
+                    val (path, branch) = resolveConfigPathForRepo(selectedRepository())
+                    val oldAndSha = try {
+                        val current = githubRequest(path, "GET")
+                        val content = String(Base64.decode(current.optString("content").replace("\n", "").replace("\r", ""), Base64.DEFAULT), Charsets.UTF_8)
+                        val sha = current.optString("sha").takeIf { it.isNotBlank() }
+                        content to sha
+                    } catch (e: Exception) {
+                        if (e.message?.contains("HTTP 404") == true) "" to null else throw e
+                    }
+                    val previous = try { JSONArray(oldAndSha.first) } catch (_: Exception) { JSONArray() }
+                    val merged = LinkedHashSet<String>()
+                    for (i in 0 until previous.length()) {
+                        val value = previous.optString(i).trim()
+                        if (value.isNotBlank()) merged.add(value)
+                    }
+                    merged.addAll(all)
+                    val json = JSONArray()
+                    merged.forEach { json.put(it) }
+                    githubWriteText(path, json.toString(2) + "\n", oldAndSha.second, "Import Telegram configs from Android")
+                    prefs.edit()
+                        .putString("admin_config_path", path)
+                        .putString("github_json_url", "https://raw.githubusercontent.com/" + selectedRepository() + "/" + branch + "/" + path)
+                        .apply()
+                    Triple(path, merged.size, all.size)
+                }
+                adminConfigPath.setText(saved.first)
+                githubJsonUrl.setText("https://raw.githubusercontent.com/" + selectedRepository() + "/" + prefs.getString("github_json_url", "").substringAfter("raw.githubusercontent.com/").substringAfter("/"))
+                say(log.toString() + "\nانجام شد ✅ تعداد " + saved.third + " کانفیگ از تلگرام دریافت شد و در " + saved.first + " ذخیره شد. تعداد کل فایل: " + saved.second)
+            } catch (e: Exception) {
+                say("ذخیره کانفیگ‌ها در GitHub ناموفق بود: " + (e.message ?: "unknown error"))
+            }
+        }
+    }
+
     private fun importFromGitHub() {
         val source = githubJsonUrl.text.toString().trim()
         if (!source.startsWith("https://")) { say(t("github_url_invalid")); return }
@@ -843,10 +942,10 @@ class TelegramSettingsActivity : AppCompatActivity() {
         return content to json.getString("sha")
     }
 
-    private fun githubWriteText(path: String, content: String, sha: String, message: String) {
+    private fun githubWriteText(path: String, content: String, sha: String?, message: String) {
         val body = JSONObject().put("message", message)
             .put("content", Base64.encodeToString(content.toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
-            .put("sha", sha)
+        if (!sha.isNullOrBlank()) body.put("sha", sha)
         githubRequest(path, "PUT", body)
     }
 
