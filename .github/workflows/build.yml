@@ -10,6 +10,7 @@ on:
       - "scripts/**"
       - "patches/**"
       - "snippets/**"
+      - "version.properties"
 
 permissions:
   contents: write
@@ -42,6 +43,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+
+      - name: Read app version
+        shell: bash
+        run: |
+          source version.properties
+          echo "APP_VERSION=$VERSION_NAME" >> "$GITHUB_ENV"
+          echo "APP_VERSION_CODE=$VERSION_CODE" >> "$GITHUB_ENV"
+          echo "Building HeheConfig v$VERSION_NAME (versionCode $VERSION_CODE)"
 
       - name: Apply Telegram import changes
         run: python3 scripts/apply_patches.py
@@ -86,10 +95,12 @@ jobs:
       - name: Publish APKs to GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: build-${{ github.run_number }}
-          name: Telegram Import APK - Build ${{ github.run_number }}
+          tag_name: v${{ env.APP_VERSION }}
+          name: HeheConfig v${{ env.APP_VERSION }}
           body: |
-            Automated APK build from commit ${{ github.sha }}.
+            HeheConfig Android app version: v${{ env.APP_VERSION }}
+            Android versionCode: ${{ env.APP_VERSION_CODE }}
+            Built from commit ${{ github.sha }}.
             Trigger: ${{ github.event_name }}
           files: upstream/V2rayNG/app/build/outputs/apk/**/*.apk
           fail_on_unmatched_files: true
