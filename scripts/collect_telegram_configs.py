@@ -13,7 +13,7 @@ from html import unescape
 ROOT = Path(__file__).resolve().parent.parent
 CHANNELS_FILE = ROOT / "telegram_channels.txt"
 OUTPUT_FILE = ROOT / "configs.json"
-LINK_RE = re.compile(r"(?:vmess|vless|trojan|ss|hysteria2|hy2|tuic)://[^\s<>\\"'\x60]+", re.I)
+LINK_RE = re.compile(r"""(?:vmess|vless|trojan|ss|hysteria2|hy2|tuic)://[^\s<>"'\x60]+""", re.I)
 UA = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 MAX_PAGES_PER_CHANNEL = 12
 
