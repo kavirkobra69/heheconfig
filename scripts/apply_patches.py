@@ -83,7 +83,7 @@ manifest.write_text(text, encoding="utf-8")
 # Add TDLib and the required NDK version idempotently.
 text = gradle.read_text(encoding="utf-8")
 # Keep the package version synchronized with version.properties for the in-app updater.
-text, code_count = re.subn(r"(?m)(versionCode\s*=\s*)\\d+", lambda m: m.group(1) + version_code, text, count=1)
+text, code_count = re.subn(r"(?m)(versionCode\s*=\s*)\d+", lambda m: m.group(1) + version_code, text, count=1)
 text, name_count = re.subn(r'(?m)(versionName\s*=\s*)["\'][^"\']*["\']', lambda m: m.group(1) + '"' + version_name + '"', text, count=1)
 if not code_count or not name_count:
     raise SystemExit("Could not locate versionCode/versionName in upstream app/build.gradle.kts")
