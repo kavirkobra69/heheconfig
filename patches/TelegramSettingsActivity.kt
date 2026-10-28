@@ -671,7 +671,8 @@ class TelegramSettingsActivity : AppCompatActivity() {
                     Triple(path, merged.size, all.size)
                 }
                 adminConfigPath.setText(saved.first)
-                githubJsonUrl.setText("https://raw.githubusercontent.com/" + selectedRepository() + "/" + prefs.getString("github_json_url", "").substringAfter("raw.githubusercontent.com/").substringAfter("/"))
+                val savedUrl = prefs.getString("github_json_url", null).orEmpty()
+                githubJsonUrl.setText(savedUrl.ifBlank { "https://raw.githubusercontent.com/${selectedRepository()}/main/${saved.first}" })
                 say(log.toString() + "\nانجام شد ✅ تعداد " + saved.third + " کانفیگ از تلگرام دریافت شد و در " + saved.first + " ذخیره شد. تعداد کل فایل: " + saved.second)
             } catch (e: Exception) {
                 say("ذخیره کانفیگ‌ها در GitHub ناموفق بود: " + (e.message ?: "unknown error"))
