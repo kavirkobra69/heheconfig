@@ -2,8 +2,8 @@ name: Update Telegram configs
 
 on:
   schedule:
-    # Every six hours; offset from the top of the hour to reduce queue delays.
-    - cron: "17 */6 * * *"
+    # Every three hours; offset from the top of the hour to reduce queue delays.
+    - cron: "17 */3 * * *"
   workflow_dispatch:
   push:
     branches: [main]
