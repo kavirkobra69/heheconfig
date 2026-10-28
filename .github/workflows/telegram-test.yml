@@ -11,7 +11,7 @@ on:
           - connection
           - send_message
       target_id:
-        description: "Target numeric Telegram user/chat ID (only for send_message)"
+        description: "Target numeric ID or public @username (only for send_message)"
         required: false
         type: string
       message:
