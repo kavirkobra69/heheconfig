@@ -714,7 +714,9 @@ class TelegramSettingsActivity : AppCompatActivity() {
         lifecycleScope.launch {
             try {
                 val path = withContext(Dispatchers.IO) {
-                    val tree = JSONObject(githubApi("https://api.github.com/repos/" + repo + "/git/trees/HEAD?recursive=1")).optJSONArray("tree") ?: JSONArray()
+                    val metadata = JSONObject(githubApi("https://api.github.com/repos/" + repo))
+                    val branch = metadata.optString("default_branch", "main")
+                    val tree = JSONObject(githubApi("https://api.github.com/repos/" + repo + "/git/trees/" + branch + "?recursive=1")).optJSONArray("tree") ?: JSONArray()
                     val candidates = mutableListOf<String>()
                     for (i in 0 until tree.length()) {
                         val item = tree.optJSONObject(i) ?: continue
@@ -726,9 +728,13 @@ class TelegramSettingsActivity : AppCompatActivity() {
                     candidates.sortedWith(compareBy<String>({ if (it == "configs.json") 0 else if (it == "config.json") 1 else 2 }, { it.count { c -> c == '/' } }, { it })).firstOrNull()
                         ?: throw Exception("No configs.json or config.json found.")
                 }
-                prefs.edit().putString("admin_config_path", path).apply()
+                val metadata = withContext(Dispatchers.IO) { JSONObject(githubApi("https://api.github.com/repos/" + repo)) }
+                val branch = metadata.optString("default_branch", "main")
+                prefs.edit().putString("admin_config_path", path)
+                    .putString("github_json_url", "https://raw.githubusercontent.com/" + repo + "/" + branch + "/" + path).apply()
                 adminConfigPath.setText(path)
-                say("Found config file: " + path)
+                githubJsonUrl.setText("https://raw.githubusercontent.com/" + repo + "/" + branch + "/" + path)
+                say("Found config file: " + path + " (branch: " + branch + ")")
             } catch (e: Exception) { say("Could not find config file: " + (e.message ?: "unknown error")) }
         }
     }
@@ -807,7 +813,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
     private fun githubWriteText(path: String, content: String, sha: String, message: String) {
         val body = JSONObject().put("message", message)
             .put("content", Base64.encodeToString(content.toByteArray(Charsets.UTF_8), Base64.NO_WRAP))
-            .put("sha", sha).put("branch", "main")
+            .put("sha", sha)
         githubRequest(path, "PUT", body)
     }
 
