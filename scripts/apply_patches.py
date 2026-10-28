@@ -8,6 +8,14 @@ manifest = app / "src/main/AndroidManifest.xml"
 gradle = app / "build.gradle.kts"
 proguard = app / "proguard-rules.pro"
 settings = root / "V2rayNG" / "settings.gradle.kts"
+version_file = Path("version.properties")
+if not version_file.is_file():
+    raise SystemExit("Missing version.properties")
+version_values = dict(line.strip().split("=", 1) for line in version_file.read_text(encoding="utf-8").splitlines() if line.strip() and not line.lstrip().startswith("#") and "=" in line)
+version_name = version_values.get("VERSION_NAME", "").strip()
+version_code = version_values.get("VERSION_CODE", "").strip()
+if not re.fullmatch(r"\d+(?:\.\d+){1,3}", version_name) or not version_code.isdigit():
+    raise SystemExit("version.properties must contain valid VERSION_NAME and VERSION_CODE")
 
 required = [
     Path("patches/TelegramManager.kt"),
@@ -74,6 +82,11 @@ manifest.write_text(text, encoding="utf-8")
 
 # Add TDLib and the required NDK version idempotently.
 text = gradle.read_text(encoding="utf-8")
+# Keep the package version synchronized with version.properties for the in-app updater.
+text, code_count = re.subn(r"(?m)(versionCode\\s*=\\s*)\\d+", lambda m: m.group(1) + version_code, text, count=1)
+text, name_count = re.subn(r'(?m)(versionName\\s*=\\s*)["\\\'][^"\\\']*["\\\']', lambda m: m.group(1) + '"' + version_name + '"', text, count=1)
+if not code_count or not name_count:
+    raise SystemExit("Could not locate versionCode/versionName in upstream app/build.gradle.kts")
 dependency = '    implementation("com.github.fazilus:tdlib-android:1.8.61")'
 if "com.github.fazilus:tdlib-android" not in text:
     if "dependencies {" not in text:
