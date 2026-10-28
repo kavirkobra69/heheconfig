@@ -85,7 +85,6 @@ jobs:
           ./gradlew :app:assemblePlaystoreDebug --no-daemon --stacktrace
 
       - name: Re-sign APKs with stable release key (when configured)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' && secrets.ANDROID_KEYSTORE_PASSWORD != '' && secrets.ANDROID_KEY_ALIAS != '' && secrets.ANDROID_KEY_PASSWORD != '' }}
         env:
           ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
@@ -94,6 +93,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -z "$ANDROID_KEYSTORE_BASE64" || -z "$ANDROID_KEYSTORE_PASSWORD" || -z "$ANDROID_KEY_ALIAS" || -z "$ANDROID_KEY_PASSWORD" ]]; then
+            echo "Stable signing secrets not configured; keeping debug APK signatures."
+            exit 0
+          fi
           KEYSTORE="$RUNNER_TEMP/heheconfig-release.jks"
           echo "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$KEYSTORE"
           find upstream/V2rayNG/app/build/outputs/apk -type f -name '*.apk' -print0 | while IFS= read -r -d '' APK; do
