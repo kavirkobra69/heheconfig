@@ -104,4 +104,5 @@ jobs:
             Trigger: ${{ github.event_name }}
           files: upstream/V2rayNG/app/build/outputs/apk/**/*.apk
           fail_on_unmatched_files: true
+          overwrite_files: true
           make_latest: true
