@@ -294,7 +294,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
         logoutBtn.text = t("logout")
         saveWorkerBtn.text = t("worker_save")
         addBtn.text = t("add_channel")
-        rangeBtn.text = tf("range_label", t("range$range"))
+        rangeBtn.text = if (lang == "fa") "بازه: " + listOf("امروز", "۲۴ ساعت اخیر", "۳ روز اخیر")[range.coerceIn(0, 2)] else tf("range_label", t("range$range"))
         importBtn.text = t("import_btn")
         githubImportBtn.text = t("github_import_btn")
         publishTelegramConfigsBtn.text = "Import Telegram configs → config.json"
@@ -341,6 +341,10 @@ class TelegramSettingsActivity : AppCompatActivity() {
             adminConfigPath.isFocusableInTouchMode = false
             adminConfigPath.isClickable = false
             root.addView(adminConfigPath)
+            if (githubTokenValue().isNotBlank() && prefs.getString("admin_config_path", "").isNullOrBlank() && prefs.getString("admin_config_discovery_attempted_repo", "") != selectedRepository()) {
+                prefs.edit().putString("admin_config_discovery_attempted_repo", selectedRepository()).apply()
+                discoverConfigPath(selectedRepository())
+            }
             adminRepairBtn.text = "Validate / repair config JSON"
             root.addView(adminRepairBtn)
             root.addView(status)
@@ -830,7 +834,8 @@ class TelegramSettingsActivity : AppCompatActivity() {
                     .setTitle("Select repository")
                     .setSingleChoiceItems(repos.toTypedArray(), repos.indexOf(current).coerceAtLeast(0)) { dialog, which ->
                         val repo = repos[which]
-                        prefs.edit().putString("admin_repo_full_name", repo).apply()
+                        prefs.edit().putString("admin_repo_full_name", repo).remove("admin_config_path").putString("admin_config_discovery_attempted_repo", repo).apply()
+                        adminConfigPath.setText("")
                         adminRepoLabel.text = "Selected repository: " + repo
                         dialog.dismiss()
                         discoverConfigPath(repo)
@@ -864,6 +869,7 @@ class TelegramSettingsActivity : AppCompatActivity() {
                 val metadata = withContext(Dispatchers.IO) { JSONObject(githubApi("https://api.github.com/repos/" + repo)) }
                 val branch = metadata.optString("default_branch", "main")
                 prefs.edit().putString("admin_config_path", path)
+                    .putString("admin_config_discovery_attempted_repo", repo)
                     .putString("github_json_url", "https://raw.githubusercontent.com/" + repo + "/" + branch + "/" + path).apply()
                 adminConfigPath.setText(path)
                 githubJsonUrl.setText("https://raw.githubusercontent.com/" + repo + "/" + branch + "/" + path)
