@@ -1,6 +1,5 @@
-# Add one PUBLIC Telegram channel username per line, without https://t.me/
-# Lines beginning with # are ignored.
-# Example:
-# example_channel
+# One Telegram channel per line. Numeric IDs are supported (recommended format: -100xxxxxxxxxx).
+# The account configured in TG_SESSION must have access to each channel.
+# You can also use a public @username.
 -1004473894125
 @Pruuxii
