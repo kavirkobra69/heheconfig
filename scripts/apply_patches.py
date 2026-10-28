@@ -26,6 +26,34 @@ for source in required:
     target.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
     print(f"Applied {source} -> {target}")
 
+# Add FileProvider support for installing APK updates downloaded inside the app.
+manifest_text = manifest.read_text(encoding="utf-8")
+permission = '    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />\\n'
+if "android.permission.REQUEST_INSTALL_PACKAGES" not in manifest_text:
+    app_marker = "    <application"
+    if app_marker not in manifest_text:
+        raise SystemExit("Could not find <application in AndroidManifest.xml")
+    manifest_text = manifest_text.replace(app_marker, permission + app_marker, 1)
+provider = """        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/heheconfig_file_paths" />
+        </provider>
+"""
+if "androidx.core.content.FileProvider" not in manifest_text:
+    manifest_text = manifest_text.replace("</application>", provider + "    </application>", 1)
+manifest.write_text(manifest_text, encoding="utf-8")
+xml_dir = app / "src/main/res/xml"
+xml_dir.mkdir(parents=True, exist_ok=True)
+(xml_dir / "heheconfig_file_paths.xml").write_text(
+    '<?xml version="1.0" encoding="utf-8"?>\\n<paths xmlns:android="http://schemas.android.com/apk/res/android">\\n    <cache-path name="update_apks" path="updates/" />\\n</paths>\\n',
+    encoding="utf-8",
+)
+
 # Register a separate launcher entry for Telegram Import.
 text = manifest.read_text(encoding="utf-8")
 activity = """        <activity
